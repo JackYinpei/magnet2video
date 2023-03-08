@@ -17,7 +17,7 @@ type Magnet2TorrentGetter interface {
 	// SetMagnet 输入给定的磁力链接
 	SetMagnet(string2 string)
 	// GetTorrent 获取torrent 文件 给定torrent 文件下载到这个路径
-	GetTorrent(path string)
+	GetTorrent() string
 }
 
 type ITorrentsDownloader struct {
@@ -28,9 +28,19 @@ type ITorrentsDownloader struct {
 	serverPath      string
 }
 
-func NewDownloader(magnet string, path string) *ITorrentsDownloader {
+func NewDownloader(path string) *ITorrentsDownloader {
 	return &ITorrentsDownloader{
-		magnet:          magnet,
+		magnet:          "",
+		path:            path,
+		torrentPath:     "",
+		torrentHttpPath: "",
+		serverPath:      "http://itorrents.org/torrent",
+	}
+}
+
+func NewDownload(path string) Magnet2TorrentGetter {
+	return &ITorrentsDownloader{
+		magnet:          "",
 		path:            path,
 		torrentPath:     "",
 		torrentHttpPath: "",
@@ -43,7 +53,7 @@ func (I *ITorrentsDownloader) SetMagnet(string2 string) {
 	I.getHash()
 }
 
-func (I *ITorrentsDownloader) GetTorrent(path string) {
+func (I *ITorrentsDownloader) GetTorrent() string {
 	// 拼接出Torrent文件 的Http url 路径
 	I.concatTorrentHttpPath()
 	// 通过http 请求 下载那个链接
@@ -53,6 +63,8 @@ func (I *ITorrentsDownloader) GetTorrent(path string) {
 		fmt.Println("resp, err := http.Head(strURL)  报错: strURL = ", strURL)
 		log.Fatalln(err)
 	}
+	fmt.Println(strURL, "torrent"+
+		" 路径地址")
 
 	// fmt.Printf("%#v\n", resp)
 	fileLength := int(resp.ContentLength)
@@ -75,6 +87,7 @@ func (I *ITorrentsDownloader) GetTorrent(path string) {
 	// 创建文件
 
 	filename := path2.Base(strURL)
+	filename = path2.Join(I.path, filename)
 	flags := os.O_CREATE | os.O_WRONLY
 	f, err := os.OpenFile(filename, flags, 0666)
 	if err != nil {
@@ -89,17 +102,19 @@ func (I *ITorrentsDownloader) GetTorrent(path string) {
 	if err != nil {
 		if err == io.EOF {
 			fmt.Println("io.EOF")
-			return
+			return ""
 		}
 		fmt.Println(err)
 		log.Fatal(err)
 	}
+	return filename
 }
 
 // 将magnet信息去除开头 得到纯hash数字
 func (I *ITorrentsDownloader) getHash() {
 	//	magnet:?xt=urn:btih:DD5B2337F90EE4D34012F0C270825B9EFF6A7960
 	splitList := strings.Split(I.magnet, ":")
+	fmt.Println(splitList, "分割出来的路径", "hash: ", splitList[len(splitList)-1])
 	I.magnet = splitList[len(splitList)-1]
 }
 
