@@ -43,7 +43,8 @@ func main() {
 	// add magnet to app
 	app.AddMagnet("magnet:?xt=urn:btih:DD5B2337F90EE4D34012F0C270825B9EFF6A7960")
 	// get torrent files inside by hash or magnet
-	app.GetFiles("magnet:?xt=urn:btih:DD5B2337F90EE4D34012F0C270825B9EFF6A7960")
+	files := app.GetFiles("magnet:?xt=urn:btih:DD5B2337F90EE4D34012F0C270825B9EFF6A7960")
+	app.DownloadFile("DD5B2337F90EE4D34012F0C270825B9EFF6A7960", files[0])
 	//signal := make(chan struct{})
 	//// 列出所有文件
 	//for _, f := range t.Files() {
@@ -70,6 +71,7 @@ func main() {
 	//	client.WaitAll()
 	//	signal <- struct{}{}
 	//}
+	app.Wg.Wait()
 	fmt.Println("下载完了")
 	// 关闭 TorrentClient
 	app.Close()

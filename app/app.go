@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/anacrolix/torrent"
 	"peer2http/util"
+	"sync"
 )
 
 type App struct {
@@ -16,6 +17,9 @@ type App struct {
 	torrentGetter util.Magnet2TorrentGetter
 	// torrent filenames which download via magnet
 	fileNames []string
+	// download file here
+	downloadTo string
+	Wg         *sync.WaitGroup
 }
 
 func New(path string) (*App, error) {
@@ -61,15 +65,49 @@ func (a *App) GetTorrent(filename string) {
 }
 
 func (a *App) GetFiles(hash string) []string {
+	singleFile := ""
 	for key, value := range a.torrents {
 		fmt.Println(key, "key", "下面是这个magnet里面的文件名")
+		if key != hash {
+			continue
+		}
 		for _, f := range value.Files() {
 			fmt.Println(f.Path(), "")
+			singleFile = f.Path()
+			break
 		}
 	}
-	return nil
+	return []string{singleFile}
 }
 
 func (a *App) Close() {
 	a.client.Close()
+}
+
+func (a *App) getDownloadFileObj(hash, filePath string) (*torrent.File, bool) {
+	for key, value := range a.torrents {
+		// download file by hash and file path
+		if key != hash {
+			continue
+		}
+		for _, f := range value.Files() {
+			if f.Path() == filePath {
+				return f, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func (a *App) DownloadFile(hash, filePath string) {
+	f, ok := a.getDownloadFileObj(hash, filePath)
+	if !ok {
+		fmt.Println("没找到这个hash 对应的这个文件名")
+	}
+	r := f.NewReader()
+	r.SetReadahead()
+	//f.Download()
+	//a.Wg.Add(1)
+	//a.client.WaitAll()
+	//a.Wg.Done()
 }
