@@ -2,7 +2,9 @@ package test
 
 import (
 	"fmt"
+	"path"
 	"peer2http/util"
+	"strings"
 	"testing"
 )
 
@@ -21,4 +23,13 @@ func TestHttpGet(t *testing.T) {
 	if fileName == "" {
 		t.Failed()
 	}
+}
+
+func TestTrimName(t *testing.T) {
+	filename := "ubuntu-20.04.5-live-server-amd64.iso.torrent"
+	fmt.Println("qian mian", filename)
+	extend := path.Ext(filename)
+	fmt.Println(extend)
+	nameonly := strings.TrimSuffix(filename, extend)
+	fmt.Println(nameonly)
 }

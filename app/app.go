@@ -66,7 +66,9 @@ func (a *App) GetTorrent(filename string) {
 	// DD5B2337F90EE4D34012F0C270825B9EFF6A7960.torrent
 
 	filename = path.Base(filename)
-	hash := strings.Trim(filename, path.Ext(filename))
+	fmt.Println("file name only without suffix with postfix", filename)
+	hash := strings.TrimSuffix(filename, path.Ext(filename))
+	fmt.Println("file name only ", hash)
 	// wait something I don't know
 	<-t.GotInfo()
 	t.DownloadAll()
@@ -113,7 +115,7 @@ func (a *App) getDownloadFileObj(hash, filePath string) (*torrent.File, bool) {
 	return nil, false
 }
 
-func (a *App) DownloadFile(hash, filePath string) {
+func (a *App) DownloadFile(hash, filePath, asFileName string) {
 	fmt.Println("get hash in downloadFile", hash, "and filePath", filePath)
 	f, ok := a.getDownloadFileObj(hash, filePath)
 	if !ok {
@@ -122,22 +124,38 @@ func (a *App) DownloadFile(hash, filePath string) {
 
 	r := f.NewReader()
 	defer r.Close()
-	cwd, _ := os.Getwd()
-	filePath = path.Join(cwd, "haojiahuo.mkv")
-	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0755)
+	file, err := os.OpenFile(asFileName, os.O_RDWR|os.O_CREATE, 0755)
 	if err != nil {
 		fmt.Println("创建文件失败， 因为", err)
 	}
 	outFile := bufio.NewWriter(file)
 	n, err := io.Copy(outFile, r)
 	fmt.Println("等待下载")
-	//f.Download()
 	if err != nil {
 		fmt.Println("io copy 的时候出现错误 因为", err)
 	}
 	fmt.Println("一共这么大", n/1024/1024)
-	//f.Download()
-	//a.Wg.Add(1)
-	//a.client.WaitAll()
-	//a.Wg.Done()
+}
+
+func (a *App) ReadFromHead(hash, filePath string) io.Reader {
+	fmt.Println("get hash in downloadFile", hash, "and filePath", filePath)
+	thisTorrent := a.torrents[hash]
+	totalPiece := thisTorrent.NumPieces()
+	fmt.Println("一共这么多块", totalPiece)
+	priorityIndex := totalPiece / 4
+	for i := 0; i <= priorityIndex; i++ {
+		thisTorrent.Piece(i).SetPriority(torrent.PiecePriorityNow)
+	}
+	f, _ := a.getDownloadFileObj(hash, filePath)
+	r := f.NewReader()
+	defer r.Close()
+
+	return r
+
+}
+
+func (a *App) ReadFromCurrent(hash, filePath string, position int64) {
+	//begin := f.BeginPieceIndex()
+	//end := f.EndPieceIndex()
+	//completed := f.BytesCompleted()
 }
