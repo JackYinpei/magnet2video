@@ -4,12 +4,15 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/anacrolix/torrent"
+	"github.com/gin-gonic/gin"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"peer2http/util"
 	"strings"
 	"sync"
+	"time"
 )
 
 type App struct {
@@ -17,7 +20,7 @@ type App struct {
 	// key as torrent obj magnet hash value
 	torrents map[string]*torrent.Torrent
 	// key as torrent obj file name
-	files map[string]*torrent.File
+	files map[string]*file
 	// torrent file getter via magnet
 	torrentGetter util.Magnet2TorrentGetter
 	// torrent filenames which download via magnet
@@ -25,16 +28,24 @@ type App struct {
 	// download file here
 	downloadTo string
 	Wg         *sync.WaitGroup
+	Router     *gin.Engine
+}
+
+type file struct {
+	file   map[string]*torrent.File
+	reader torrent.Reader
 }
 
 func New(path string) (*App, error) {
 	client := util.NewClient()
 	getter := util.NewDownload(path)
+	r := gin.Default()
 	return &App{
 		client:        client,
 		torrents:      make(map[string]*torrent.Torrent),
-		files:         nil,
+		files:         make(map[string]*file, 0),
 		torrentGetter: getter,
+		Router:        r,
 	}, nil
 }
 
@@ -76,7 +87,6 @@ func (a *App) GetTorrent(filename string) {
 	for _, file := range t.Files() {
 		fmt.Println(file.Path(), "DEBUG 列出所有文件")
 	}
-	fmt.Println(hash, "这是添加torrent 对象到app的map 时的hash值， 要是和后面的一样，那就是这里添加的问题，可能是指针的问题")
 	a.torrents[hash] = t
 }
 
@@ -87,12 +97,28 @@ func (a *App) GetFiles(hash string) []string {
 		if key != hash {
 			continue
 		}
-		for _, f := range value.Files() {
-			fmt.Println(f.Path(), " hash 里的一个文件名")
-			files = append(files, f.Path())
+		hashFiles := &file{
+			file: make(map[string]*torrent.File, 0),
 		}
+		for _, f := range value.Files() {
+			files = append(files, f.Path())
+			hashFiles.file[f.Path()] = f
+		}
+		a.files[hash] = hashFiles
 	}
 	return files
+}
+
+func (a *App) ContentServer(w http.ResponseWriter, r *http.Request, hash string, filename string) {
+	f, ok := a.getDownloadFileObj(hash, filename)
+	if !ok {
+		fmt.Println("没找到这个hash 对应的这个文件名")
+	}
+	if a.files[hash].reader == nil {
+		reader := f.NewReader()
+		a.files[hash].reader = reader
+	}
+	http.ServeContent(w, r, filename, time.Now(), a.files[hash].reader)
 }
 
 func (a *App) Close() {
@@ -151,6 +177,10 @@ func (a *App) ReadFromHead(hash, filePath string) io.Reader {
 	defer r.Close()
 
 	return r
+
+}
+
+func (a *App) name() {
 
 }
 
