@@ -3,8 +3,6 @@ package app
 import (
 	"bufio"
 	"fmt"
-	"github.com/anacrolix/torrent"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/anacrolix/torrent"
+	"github.com/gin-gonic/gin"
 )
 
 type App struct {
@@ -39,13 +40,11 @@ type file struct {
 func New(path string) (*App, error) {
 	client := util.NewClient()
 	getter := util.NewDownload(path)
-	r := gin.Default()
 	return &App{
 		client:        client,
 		torrents:      make(map[string]*torrent.Torrent),
 		files:         make(map[string]*file, 0),
 		torrentGetter: getter,
-		Router:        r,
 	}, nil
 }
 
