@@ -6,6 +6,9 @@ import (
 	"peer2http/util"
 	"strings"
 	"testing"
+
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 func TestTrim(t *testing.T) {
@@ -32,4 +35,27 @@ func TestTrimName(t *testing.T) {
 	fmt.Println(extend)
 	nameonly := strings.TrimSuffix(filename, extend)
 	fmt.Println(nameonly)
+}
+
+type User struct {
+	gorm.Model
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func TestDBCon(t *testing.T) {
+	dsn := "root:mysql@tcp(127.0.0.1:3306)/haojiahuo?charset=utf8mb4&parseTime=True&loc=Local"
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if !db.Migrator().HasTable(&User{}) {
+		db.Migrator().AutoMigrate(&User{})
+	}
+	if err != nil {
+		fmt.Println("初始化数据库失败 因为", err)
+	}
+	user := User{
+		Username: "haojiahuo",
+		Password: "haojiahuo",
+	}
+	id := db.Create(&user)
+	fmt.Println(id, "创建的user 的id")
 }
