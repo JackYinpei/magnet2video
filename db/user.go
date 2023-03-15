@@ -5,17 +5,18 @@ import (
 	"gorm.io/gorm"
 )
 
-func init() {
+func createTable() {
 	if !DB.Migrator().HasTable(&User{}) {
 		DB.Migrator().AutoMigrate(&User{})
 	}
+	DB.AutoMigrate(&User{})
 }
 
 type User struct {
 	gorm.Model
 	Username string `json:"username" grom:"username"`
 	Password string `json:"password" gorm:"password"`
-	Status   string
+	Status   string `json:"status" gorm:"status"`
 	Avatar   string `gorm:"size:1000"`
 }
 

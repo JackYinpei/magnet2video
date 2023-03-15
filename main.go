@@ -2,12 +2,15 @@ package main
 
 import (
 	app2 "peer2http/app"
+	"peer2http/db"
 )
 
 // magnet:?xt=urn:btih:DD5B2337F90EE4D34012F0C270825B9EFF6A7960
 func main() {
 	// download file by given torrent file
 	app, _ := app2.New("../torrents")
+	// 链接数据库
+	db.Databases()
 	app.NewRouter()
 	// app.Router.GET("/magnet", func(context *gin.Context) {
 	// 	magnet := context.Query("name")

@@ -15,7 +15,7 @@ func (app *App) NewRouter() {
 	// app.Router.Use(middleware.CurrentUser())
 	v1 := app.Router.Group("/api/v1")
 	{
-		v1.POST("Ping", api.Ping)
+		v1.POST("ping", api.Ping)
 
 		v1.POST("user/register", api.UserRegister)
 	}
