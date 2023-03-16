@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"peer2http/db"
 	"peer2http/serializer"
 
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
 )
 
@@ -42,10 +44,18 @@ func ErrResponse(err error) serializer.Response {
 }
 
 func CurrentUser(c *gin.Context) *db.User {
-	if user, _ := c.Get("user"); user != nil {
-		if u, ok := user.(*db.User); ok {
-			return u
+	if user, exists := c.Get("user"); exists {
+		fmt.Println("上下文中存在这个 user的map claim", user)
+		// TODO DB中查询当前user
+		if userid, ok := user.(jwt.MapClaims)["id"]; ok {
+			fmt.Println("这是jwt类型断言之后", userid)
+			userinDB, err := db.GetUser(userid)
+			if err != nil {
+				return nil
+			}
+			return &userinDB
 		}
+		fmt.Println("类型断言失败")
 	}
 	return nil
 }

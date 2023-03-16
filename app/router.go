@@ -2,6 +2,7 @@ package app
 
 import (
 	"peer2http/api"
+	"peer2http/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,6 +19,11 @@ func (app *App) NewRouter() {
 		v1.POST("ping", api.Ping)
 
 		v1.POST("user/register", api.UserRegister)
+
+		v1.POST("user/login", api.UserLogin)
+		authed := v1.Group("/")
+		authed.Use(middleware.JwtVerify())
+		authed.GET("me", api.UserMe)
 	}
 
 }
