@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,8 +14,9 @@ import (
 	"time"
 
 	"github.com/anacrolix/torrent"
-	"github.com/gin-gonic/gin"
 )
+
+var AppObj *App
 
 type App struct {
 	client *torrent.Client
@@ -29,7 +31,6 @@ type App struct {
 	// download file here
 	downloadTo string
 	Wg         *sync.WaitGroup
-	Router     *gin.Engine
 }
 
 type file struct {
@@ -40,32 +41,40 @@ type file struct {
 func New(path string) (*App, error) {
 	client := util.NewClient()
 	getter := util.NewDownload(path)
-	return &App{
+	AppObj = &App{
 		client:        client,
 		torrents:      make(map[string]*torrent.Torrent),
 		files:         make(map[string]*file, 0),
 		torrentGetter: getter,
-	}, nil
+	}
+	return AppObj, nil
 }
 
-func (a *App) AddMagnet(magnet string) {
+func (a *App) AddMagnet(magnet string) error {
 	a.torrentGetter.SetMagnet(magnet)
 	fmt.Println("Get magnet torrent file done")
 	// get torrent file by magnet
 	filename := a.torrentGetter.GetTorrent()
 	if filename == "" {
 		fmt.Println("获取这个magnet 对应的torrent file失败")
+		return errors.New("cannot find this magnet corresponding torrent")
 	}
 	// Get torrent by magnet should insensible
-	a.GetTorrent(filename)
+	err := a.GetTorrent(filename)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (a *App) GetTorrent(filename string) {
+func (a *App) GetTorrent(filename string) error {
 	// 将通过magnet 下载的torrent 文件 获取到torrent 对象
 	t, err := a.client.AddTorrentFromFile(filename)
 	fmt.Println("Add torrent obj to app")
 	if err != nil {
 		fmt.Println("解析torrent 文件失败 因为：", err)
+		return err
 	}
 	// Add tracker list to torrent obj
 	tracker := util.NewTracker("./tracker.txt")
@@ -87,6 +96,7 @@ func (a *App) GetTorrent(filename string) {
 		fmt.Println(file.Path(), "DEBUG 列出所有文件")
 	}
 	a.torrents[hash] = t
+	return nil
 }
 
 func (a *App) GetFiles(hash string) []string {

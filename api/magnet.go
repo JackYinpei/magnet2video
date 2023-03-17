@@ -1,6 +1,7 @@
 package api
 
 import (
+	"peer2http/app"
 	"peer2http/serializer"
 	"peer2http/service"
 
@@ -17,8 +18,17 @@ func AddMagnet(c *gin.Context) {
 		})
 	}
 	if err := c.ShouldBind(&service); err == nil {
-		res := service.Create(uint(userid.(float64)))
-		c.JSON(200, res)
+		err := app.AppObj.AddMagnet(service.Magnet)
+		if err != nil {
+			c.JSON(500, serializer.Response{
+				Status: 50000,
+				Msg:    "添加magnet失败",
+				Error:  err.Error(),
+			})
+		} else {
+			res := service.Create(uint(userid.(float64)))
+			c.JSON(200, res)
+		}
 	} else {
 		c.JSON(200, ErrResponse(err))
 	}
