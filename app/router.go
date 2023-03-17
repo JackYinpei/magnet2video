@@ -24,6 +24,8 @@ func (app *App) NewRouter() {
 		authed := v1.Group("/")
 		authed.Use(middleware.JwtVerify())
 		authed.GET("me", api.UserMe)
+		authed.POST("magnet", api.AddMagnet)
+		authed.GET("magnets", api.ListMagnets)
 	}
 
 }

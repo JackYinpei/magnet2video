@@ -6,6 +6,7 @@ import (
 )
 
 // magnet:?xt=urn:btih:DD5B2337F90EE4D34012F0C270825B9EFF6A7960
+// magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10
 func main() {
 	// download file by given torrent file
 	app, _ := app2.New("../torrents")

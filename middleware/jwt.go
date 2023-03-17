@@ -39,7 +39,10 @@ func JwtVerify() gin.HandlerFunc {
 
 		if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 			fmt.Println(claims, "jwt 的 payload 信息")
+			userid := claims["id"]
+			fmt.Printf("%t userid 类型", userid)
 			c.Set("user", claims) // 将jwt的payload信息存储到gin的上下文中
+			c.Set("userid", userid)
 			c.Next()
 		} else {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, serializer.Response{

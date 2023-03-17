@@ -17,5 +17,6 @@ func Databases() {
 	}
 	// auto migrator
 	DB = db
-	createTable()
+	createUserTable()
+	createMagnetTable()
 }

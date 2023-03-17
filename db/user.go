@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func createTable() {
+func createUserTable() {
 	if !DB.Migrator().HasTable(&User{}) {
 		DB.Migrator().AutoMigrate(&User{})
 	}
