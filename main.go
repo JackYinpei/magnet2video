@@ -12,12 +12,11 @@ func main() {
 
 	// 链接数据库
 	db.Databases()
+	// init torrent client
+	app, _ := app2.New("./torrents")
 	// init web server router
 	router := api.NewRouter()
 	router.Run(":8080")
-
-	// download file by given torrent file
-	app, _ := app2.New("../torrents")
 
 	// app.Router.GET("/magnet", func(context *gin.Context) {
 	// 	magnet := context.Query("name")

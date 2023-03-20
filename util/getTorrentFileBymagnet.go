@@ -91,7 +91,7 @@ func (I *ITorrentsDownloader) GetTorrent() string {
 	flags := os.O_CREATE | os.O_WRONLY
 	f, err := os.OpenFile(filename, flags, 0666)
 	if err != nil {
-		fmt.Println("创建文件失败")
+		fmt.Println("创建文件失败", err)
 		log.Fatal("err")
 	}
 	defer f.Close()

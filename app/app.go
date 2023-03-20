@@ -51,6 +51,7 @@ func New(path string) (*App, error) {
 }
 
 func (a *App) AddMagnet(magnet string) error {
+	fmt.Println(magnet, "magnet is going to add into client")
 	a.torrentGetter.SetMagnet(magnet)
 	fmt.Println("Get magnet torrent file done")
 	// get torrent file by magnet

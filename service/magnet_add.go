@@ -19,7 +19,7 @@ func (service *MagnetService) Create(userId uint) serializer.Response {
 	}
 	// TODO 若数据库已经存在这个magnet 处理情况
 	magnets := make([]db.Magnet, 0)
-	result := db.DB.Where("magnet = ?", magnet.Magnet).Find(magnets)
+	result := db.DB.Where("magnet = ?", magnet.Magnet).Find(&magnets)
 	if result.Error == nil {
 		if len(magnets) > 1 {
 			return serializer.Response{
