@@ -29,7 +29,8 @@ func NewRouter() *gin.Engine {
 		// add magnet to this user
 		authed.POST("magnet", AddMagnet)
 		// list all magnets which this user owns
-		authed.GET("magnet", ListMagnets)
+		authed.GET("magnets", ListMagnets)
+		authed.DELETE("magnet/:magnet", DeleteMagnet)
 		// get magnet files 前面的路由已经存在了，怪不得这里进不去
 		// 这里使用的时候不需要加？magnet=*** 直接加magnet string
 		// 操！！！ 我传进来的magnet string 被裁掉了

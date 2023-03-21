@@ -35,6 +35,17 @@ func AddMagnet(c *gin.Context) {
 	}
 }
 
+func DeleteMagnet(c *gin.Context) {
+	magnetString := c.Param("magnet") + "?xt=" + c.Query("xt")
+	userid, _ := c.Get("userid")
+	service := service.MagnetServiceDelete{
+		Magnet: magnetString,
+		UserId: uint(userid.(float64)),
+	}
+	res := service.Delete()
+	c.JSON(200, res)
+}
+
 func ListMagnets(c *gin.Context) {
 	listService := service.ListMagnetsService{}
 	userid, ok := c.Get("userid")

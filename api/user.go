@@ -45,7 +45,7 @@ func UserLogin(c *gin.Context) {
 			token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 				"id":       user.ID,
 				"username": user.Username,
-				"exp":      time.Now().Add(time.Hour * 24).Unix(), // 设置token过期时间为24小时
+				"exp":      time.Now().Add(time.Hour * 24 * 365).Unix(), // 设置token过期时间为24小时
 			})
 
 			tokenString, err := token.SignedString([]byte(signingKey))
