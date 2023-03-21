@@ -91,7 +91,8 @@ func (a *App) GetTorrent(filename string) error {
 	fmt.Println("file name only ", hash)
 	// wait something I don't know
 	<-t.GotInfo()
-	t.DownloadAll()
+	// 好家伙，就是这里把所有的文件都下载下来了
+	// t.DownloadAll()
 	fmt.Println("准备torrent 对象完成")
 	for _, file := range t.Files() {
 		fmt.Println(file.Path(), "DEBUG 列出所有文件")

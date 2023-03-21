@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"peer2http/app"
 	"peer2http/serializer"
 	"peer2http/service"
@@ -49,4 +50,23 @@ func ListMagnets(c *gin.Context) {
 	} else {
 		c.JSON(200, ErrResponse(err))
 	}
+}
+
+func GetMagnetFile(c *gin.Context) {
+	magnetString := c.Param("magnet")
+	userid, ok := c.Get("userid")
+	fmt.Println(userid, magnetString, "dadadadadaddadadada")
+	if !ok {
+		c.JSON(500, serializer.Response{
+			Status: 50001,
+			Msg:    "中间件里明明有放userid",
+		})
+	}
+	service := service.MagnetListService{
+		Magnet: magnetString,
+		UserID: uint(userid.(float64)),
+	}
+	fmt.Println(service, "service info in GetMagnetFile function")
+	res := service.GetMagnetService()
+	c.JSON(200, res)
 }
