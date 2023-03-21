@@ -15,8 +15,8 @@ type MagnetListService struct {
 
 func (mf *MagnetListService) OwnThis() bool {
 	var magnet db.Magnet
-	db.DB.Preload("User").Where("Id = ?", mf.UserID).Find(&magnet)
-	fmt.Printf("%v user id == %v 这个的所有的magnet", magnet, mf.UserID)
+	db.DB.First(&magnet).Where("UserID = ?", mf.UserID)
+	fmt.Printf("%v user id == %v 这个的所有的magnet %v %v %v \n", magnet, mf.UserID, mf.Magnet == magnet.Magnet, magnet.Magnet, mf.Magnet)
 	return magnet.Magnet == mf.Magnet
 }
 

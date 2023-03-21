@@ -53,7 +53,7 @@ func ListMagnets(c *gin.Context) {
 }
 
 func GetMagnetFile(c *gin.Context) {
-	magnetString := c.Param("magnet")
+	magnetString := c.Param("magnet") + "?xt=" + c.Query("xt")
 	userid, ok := c.Get("userid")
 	fmt.Println(userid, magnetString, "dadadadadaddadadada")
 	if !ok {

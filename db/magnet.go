@@ -6,7 +6,7 @@ type Magnet struct {
 	gorm.Model
 	Title  string
 	Magnet string
-	UserID uint `gorm:"ForeignKey:UserID"`
+	UserID uint `gorm:"ForeignKey:UserID;AssociationForeignKey:ID"`
 }
 
 func (magnet *Magnet) Usage() uint64 {

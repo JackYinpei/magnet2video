@@ -32,6 +32,7 @@ func NewRouter() *gin.Engine {
 		authed.GET("magnet", ListMagnets)
 		// get magnet files 前面的路由已经存在了，怪不得这里进不去
 		// 这里使用的时候不需要加？magnet=*** 直接加magnet string
+		// 操！！！ 我传进来的magnet string 被裁掉了
 		authed.GET("mf/:magnet", GetMagnetFile)
 		// authed.POST("magnet", func(ctx *gin.Context) {
 
