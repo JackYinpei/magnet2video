@@ -28,6 +28,7 @@ func NewRouter() *gin.Engine {
 		authed.GET("me", UserMe)
 		// add magnet to this user
 		authed.POST("magnet", AddMagnet)
+		// TODO 可能要加一个中间件 来判断user 是不是own this magnet
 		// list all magnets which this user owns
 		authed.GET("magnets", ListMagnets)
 		authed.DELETE("magnet/:magnet", DeleteMagnet)
@@ -35,6 +36,7 @@ func NewRouter() *gin.Engine {
 		// 这里使用的时候不需要加？magnet=*** 直接加magnet string
 		// 操！！！ 我传进来的magnet string 被裁掉了
 		authed.GET("mf/:magnet", GetMagnetFile)
+		authed.GET("video", GetVideo)
 		// authed.POST("magnet", func(ctx *gin.Context) {
 
 		// 	// app.AddMagnet(magnet)
