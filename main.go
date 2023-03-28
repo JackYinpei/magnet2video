@@ -16,7 +16,7 @@ func main() {
 	app, _ := app2.New("./torrents")
 	// init web server router
 	router := api.NewRouter()
-	router.Run(":8080")
+	router.Run(":80")
 
 	// app.Router.GET("/magnet", func(context *gin.Context) {
 	// 	magnet := context.Query("name")

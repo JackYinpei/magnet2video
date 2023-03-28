@@ -27,6 +27,7 @@ func AddMagnet(c *gin.Context) {
 				Error:  err.Error(),
 			})
 		} else {
+			fmt.Println("下一步 添加这个magnet 到数据库")
 			res := service.Create(uint(userid.(float64)))
 			c.JSON(200, res)
 		}

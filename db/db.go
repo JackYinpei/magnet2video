@@ -19,4 +19,5 @@ func Databases() {
 	DB = db
 	createUserTable()
 	createMagnetTable()
+	createShareTable()
 }

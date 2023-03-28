@@ -9,3 +9,10 @@ type Share struct {
 	User     User   `gorm:"foreignKey:UserID"`
 	Magnet   Magnet `gorm:"foreignKey:MagnetID"`
 }
+
+func createShareTable() {
+	if !DB.Migrator().HasTable(&Share{}) {
+		DB.Migrator().AutoMigrate(&Share{})
+	}
+	DB.AutoMigrate(&Share{})
+}

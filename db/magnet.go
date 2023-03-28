@@ -18,6 +18,7 @@ type Magnet struct {
 	User           User `gorm:"foreignKey:UserID"`
 	Shares         []Share
 	ShareCondition bool
+	Count          uint
 }
 
 func (magnet *Magnet) Usage() uint64 {
