@@ -2,11 +2,22 @@ package db
 
 import "gorm.io/gorm"
 
+//	type Magnet struct {
+//		gorm.Model
+//		Title  string
+//		Magnet string
+//		UserID uint
+//		User   User `gorm:"ForeignKey:ID"`
+//		Share  bool
+//	}
 type Magnet struct {
 	gorm.Model
-	Title  string
-	Magnet string
-	UserID uint `gorm:"ForeignKey:UserID;AssociationForeignKey:ID"`
+	Title          string
+	Magnet         string
+	UserID         uint
+	User           User `gorm:"foreignKey:UserID"`
+	Shares         []Share
+	ShareCondition bool
 }
 
 func (magnet *Magnet) Usage() uint64 {

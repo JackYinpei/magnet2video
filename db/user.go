@@ -12,12 +12,23 @@ func createUserTable() {
 	DB.AutoMigrate(&User{})
 }
 
+// type User struct {
+// 	gorm.Model
+// 	Username string   `json:"username" grom:"username"`
+// 	Password string   `json:"password" gorm:"password"`
+// 	Status   string   `json:"status" gorm:"status"`
+// 	Avatar   string   `gorm:"size:1000"`
+// 	Magnets  []Magnet `gorm:"foreignKey:ID"`
+// }
+
 type User struct {
 	gorm.Model
 	Username string `json:"username" grom:"username"`
 	Password string `json:"password" gorm:"password"`
 	Status   string `json:"status" gorm:"status"`
 	Avatar   string `gorm:"size:1000"`
+	Magnets  []Magnet
+	Shares   []Share
 }
 
 const (
