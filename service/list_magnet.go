@@ -11,7 +11,7 @@ type ListMagnetsService struct {
 	Magnets []MagnetService
 }
 
-func (list *ListMagnetsService) Create(userID uint) serializer.Response {
+func (list *ListMagnetsService) ListMagnets(userID uint) serializer.Response {
 	magnets := []db.Magnet{}
 	total := int64(0)
 	if list.Limit == 0 {

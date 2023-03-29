@@ -17,6 +17,10 @@ func (mf *MagnetListService) OwnThis() bool {
 	var magnet db.Magnet
 	db.DB.First(&magnet).Where("UserID = ?", mf.UserID)
 	fmt.Printf("%v user id == %v 这个的所有的magnet %v %v %v \n", magnet, mf.UserID, mf.Magnet == magnet.Magnet, magnet.Magnet, mf.Magnet)
+	// search one and add view
+	if magnet.Magnet == mf.Magnet {
+		magnet.AddView()
+	}
 	return magnet.Magnet == mf.Magnet
 }
 

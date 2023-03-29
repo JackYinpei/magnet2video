@@ -57,7 +57,7 @@ func ListMagnets(c *gin.Context) {
 		})
 	}
 	if err := c.ShouldBind(&listService); err == nil {
-		res := listService.Create(uint(userid.(float64)))
+		res := listService.ListMagnets(uint(userid.(float64)))
 		c.JSON(200, res)
 	} else {
 		c.JSON(200, ErrResponse(err))

@@ -3,6 +3,7 @@ package main
 import (
 	"peer2http/api"
 	app2 "peer2http/app"
+	"peer2http/cache"
 	"peer2http/db"
 )
 
@@ -12,6 +13,8 @@ func main() {
 
 	// 链接数据库
 	db.Databases()
+	// 链接redis
+	cache.Redis()
 	// init torrent client
 	app, _ := app2.New("./torrents")
 	// init web server router
