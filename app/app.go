@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/metainfo"
+	"go.etcd.io/bbolt"
 )
 
 var AppObj *App
@@ -31,7 +34,16 @@ type App struct {
 	// download file here
 	downloadTo string
 	Wg         *sync.WaitGroup
+
+	mu sync.RWMutex
+	// bolt.DB 创建bolt.db 当服务器退出后重启，可以从bolt.db 里加载client 信息
+	db *bbolt.DB
 }
+
+const (
+	dbName       = ".app.bolt.db"
+	dbBucketInfo = "torrent_info"
+)
 
 type file struct {
 	file   map[string]*torrent.File
@@ -48,6 +60,46 @@ func New(path string) (*App, error) {
 		torrentGetter: getter,
 	}
 	return AppObj, nil
+}
+func (a *App) Load() error {
+	// control does not create too many goroutines max 32
+	sema := make(chan struct{}, 32)
+	return a.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(dbBucketInfo))
+
+		return b.ForEach(func(_, v []byte) error {
+			var err error
+			var mi *metainfo.MetaInfo
+			// declare but not used
+			// var t *torrent.Torrent
+
+			mi, err = metainfo.Load(bytes.NewReader(v))
+
+			if err != nil {
+				fmt.Println("启动服务 读取metainfo from bolt db 的一个magnet 失败 因为", err)
+				// 只是读取一个失败 不至于panic 所以返回nil
+				return nil
+			}
+
+			sema <- struct{}{}
+
+			go func() {
+				defer func() {
+					<-sema
+				}()
+				t, err := a.client.AddTorrent(mi)
+				if err != nil {
+					fmt.Println("add torrent from metainfo error for", err)
+				}
+				t.AddTrackers([][]string)
+				// control multi goroutine lock
+				a.mu.Lock()
+				a.torrents[t.Info().Name] = t
+				a.mu.Unlock()
+			}()
+			return nil
+		})
+	})
 }
 
 func (a *App) AddMagnet(magnet string) error {
