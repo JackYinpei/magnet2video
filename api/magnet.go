@@ -79,6 +79,6 @@ func GetMagnetFile(c *gin.Context) {
 		UserID: uint(userid.(float64)),
 	}
 	fmt.Println(service, "service info in GetMagnetFile function")
-	res := service.GetMagnetService()
+	res := service.GetMagnetFiles()
 	c.JSON(200, res)
 }
