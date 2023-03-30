@@ -15,10 +15,10 @@ func (m *MyHotMangetsService) GetMyLove(userID uint) serializer.Response {
 	if m.Limit == 0 {
 		m.Limit = 6
 	}
-	hotMap := cache.GetUserMagnetHot(userID)
+	sortedHot := cache.GetUserMagnetHot(userID)
 	return serializer.Response{
 		Status: 10001,
-		Msg:    "unsorted user hot magnet",
-		Data:   hotMap,
+		Msg:    "sorted user hot magnet",
+		Data:   sortedHot,
 	}
 }
