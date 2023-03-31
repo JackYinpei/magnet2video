@@ -81,23 +81,24 @@ func New(path string) (*App, error) {
 func (a *App) Load() error {
 	// control does not create too many goroutines max 32
 	sema := make(chan struct{}, 32)
+	defer close(sema)
 	return a.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(dbBucketInfo))
 
-		return b.ForEach(func(_, v []byte) error {
+		// I don't care about the key of the metainfo
+		return b.ForEach(func(hashB, v []byte) error {
 			var err error
 			var mi *metainfo.MetaInfo
 			// declare but not used
 			// var t *torrent.Torrent
-
+			hash := string(hashB[:])
 			mi, err = metainfo.Load(bytes.NewReader(v))
-			fmt.Println(mi.InfoBytes.GoString(), "some info stored in bolt db")
-
 			if err != nil {
 				fmt.Println("启动服务 读取metainfo from bolt db 的一个magnet 失败 因为", err)
 				// 只是读取一个失败 不至于panic 所以返回nil
 				return nil
 			}
+			fmt.Println("metainfo readed from bbolt db here is the metainfo info TLTR")
 
 			sema <- struct{}{}
 
@@ -112,7 +113,7 @@ func (a *App) Load() error {
 				// control multi goroutine lock
 				a.mu.Lock()
 				t.AddTrackers(a.trackers)
-				a.torrents[t.Info().Name] = t
+				a.torrents[hash] = t
 				a.mu.Unlock()
 			}()
 			return nil
@@ -166,7 +167,10 @@ func (a *App) GetTorrent(filename string) error {
 	}
 	err = a.db.Update(func(tx *bbolt.Tx) error {
 		var b = tx.Bucket([]byte(dbBucketInfo))
-		return b.Put(t.InfoHash().Bytes(), buf.Bytes())
+		fmt.Println("Here put t.InfoHash().Bytes() into db torrentInfoName: ", t.Info().Name, "here is magnet hash", hash)
+		// TODO I want to put magnet hash as key
+		// return b.Put(t.InfoHash().Bytes(), buf.Bytes())
+		return b.Put([]byte(hash), buf.Bytes())
 	})
 	if err != nil {
 		fmt.Println("put metainfo bytes to db fail cause", err)
