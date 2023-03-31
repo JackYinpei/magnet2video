@@ -35,9 +35,12 @@ type App struct {
 	downloadTo string
 	Wg         *sync.WaitGroup
 
+	// add torrent to torrents will need lock
 	mu sync.RWMutex
 	// bolt.DB 创建bolt.db 当服务器退出后重启，可以从bolt.db 里加载client 信息
 	db *bbolt.DB
+	// trackers add a torrent obj need add tracker
+	trackers [][]string
 }
 
 const (
@@ -51,16 +54,30 @@ type file struct {
 }
 
 func New(path string) (*App, error) {
+	// don't know the client config well so create a default client
 	client := util.NewClient()
 	getter := util.NewDownload(path)
+	loadDB, err := connectBoltDB("/data/go_proj/magnet2video/my.bolt.db")
+	tracker := util.NewTracker("./tracker.txt")
+	trackers := tracker.GetTrackerList()
 	AppObj = &App{
 		client:        client,
 		torrents:      make(map[string]*torrent.Torrent),
 		files:         make(map[string]*file, 0),
 		torrentGetter: getter,
+		db:            loadDB,
+		trackers:      trackers,
+	}
+	if err == nil {
+		AppObj.Load()
+	} else {
+		fmt.Println("load client metainfo failed cause", err, "skip load db")
+		// panci for test
+		panic("load db faild")
 	}
 	return AppObj, nil
 }
+
 func (a *App) Load() error {
 	// control does not create too many goroutines max 32
 	sema := make(chan struct{}, 32)
@@ -74,6 +91,7 @@ func (a *App) Load() error {
 			// var t *torrent.Torrent
 
 			mi, err = metainfo.Load(bytes.NewReader(v))
+			fmt.Println(mi.InfoBytes.GoString(), "some info stored in bolt db")
 
 			if err != nil {
 				fmt.Println("启动服务 读取metainfo from bolt db 的一个magnet 失败 因为", err)
@@ -91,9 +109,9 @@ func (a *App) Load() error {
 				if err != nil {
 					fmt.Println("add torrent from metainfo error for", err)
 				}
-				t.AddTrackers([][]string)
 				// control multi goroutine lock
 				a.mu.Lock()
+				t.AddTrackers(a.trackers)
 				a.torrents[t.Info().Name] = t
 				a.mu.Unlock()
 			}()
@@ -124,32 +142,39 @@ func (a *App) AddMagnet(magnet string) error {
 func (a *App) GetTorrent(filename string) error {
 	// 将通过magnet 下载的torrent 文件 获取到torrent 对象
 	t, err := a.client.AddTorrentFromFile(filename)
-	fmt.Println("Add torrent obj to app")
 	if err != nil {
 		fmt.Println("解析torrent 文件失败 因为：", err)
 		return err
 	}
-	// Add tracker list to torrent obj
-	tracker := util.NewTracker("./tracker.txt")
-	trackers := tracker.GetTrackerList()
-	t.AddTrackers(trackers)
 	// get torrent file hash which is just downloaded by magnet and add torrent obj to app
 	// this filename is download path with join torrent file name such as C:\goproj\peer2HttpDemo\torrents/
 	// DD5B2337F90EE4D34012F0C270825B9EFF6A7960.torrent
 
 	filename = path.Base(filename)
-	fmt.Println("file name only without suffix with postfix", filename)
 	hash := strings.TrimSuffix(filename, path.Ext(filename))
-	fmt.Println("file name only ", hash)
-	// wait something I don't know
+	fmt.Println("file name only ", hash, "file name only without suffix with postfix", filename)
+	// wait get torrent metainfo
 	<-t.GotInfo()
-	// 好家伙，就是这里把所有的文件都下载下来了
-	// t.DownloadAll()
 	fmt.Println("准备torrent 对象完成")
-	for _, file := range t.Files() {
-		fmt.Println(file.Path(), "DEBUG 列出所有文件")
+	// write hash and  torrent obj pari need add a lock
+	a.mu.Lock()
+	var mi = t.Metainfo()
+	var buf = bytes.NewBuffer(nil)
+	err = mi.Write(buf)
+	if err != nil {
+		fmt.Println("write metainfo to bbolt db fail cause ", err)
 	}
+	err = a.db.Update(func(tx *bbolt.Tx) error {
+		var b = tx.Bucket([]byte(dbBucketInfo))
+		return b.Put(t.InfoHash().Bytes(), buf.Bytes())
+	})
+	if err != nil {
+		fmt.Println("put metainfo bytes to db fail cause", err)
+	}
+	// Add tracker list to torrent obj
+	t.AddTrackers(a.trackers)
 	a.torrents[hash] = t
+	a.mu.Unlock()
 	return nil
 }
 
