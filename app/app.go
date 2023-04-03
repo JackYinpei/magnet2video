@@ -207,13 +207,14 @@ func (a *App) ContentServer(w http.ResponseWriter, r *http.Request, hash string,
 		fmt.Println("没找到这个hash 对应的这个文件名")
 	}
 	// TODO It works after the following line added with no panci info but it still should have a better resolution to add hashfile obj into a.files map
-	a.GetFiles(hash)
-	if a.files[hash].reader == nil {
-		reader := f.NewReader()
-		a.files[hash].reader = reader
-	}
-	fmt.Println("zhe li ying gai you fan ying le", w.Header())
-	http.ServeContent(w, r, filename, time.Now(), a.files[hash].reader)
+	// a.GetFiles(hash)
+	// if a.files[hash].reader == nil {
+	// 	reader := f.NewReader()
+	// 	a.files[hash].reader = reader
+	// }
+	// fmt.Println("zhe li ying gai you fan ying le", w.Header())
+	// http.ServeContent(w, r, filename, time.Now(), a.files[hash].reader)
+	http.ServeContent(w, r, filename, time.Now(), f.NewReader())
 }
 
 func (a *App) Close() {
