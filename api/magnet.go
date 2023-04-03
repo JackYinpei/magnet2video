@@ -19,6 +19,7 @@ func AddMagnet(c *gin.Context) {
 		})
 	}
 	if err := c.ShouldBind(&service); err == nil {
+		// here add magnet obj to app map
 		err := app.AppObj.AddMagnet(service.Magnet)
 		if err != nil {
 			c.JSON(500, serializer.Response{

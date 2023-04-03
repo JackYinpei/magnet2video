@@ -168,7 +168,7 @@ func (a *App) GetTorrent(filename string) error {
 	err = a.db.Update(func(tx *bbolt.Tx) error {
 		var b = tx.Bucket([]byte(dbBucketInfo))
 		fmt.Println("Here put t.InfoHash().Bytes() into db torrentInfoName: ", t.Info().Name, "here is magnet hash", hash)
-		// TODO I want to put magnet hash as key
+		// TODO I want to put magnet hash as key Done!
 		// return b.Put(t.InfoHash().Bytes(), buf.Bytes())
 		return b.Put([]byte(hash), buf.Bytes())
 	})
@@ -206,10 +206,13 @@ func (a *App) ContentServer(w http.ResponseWriter, r *http.Request, hash string,
 	if !ok {
 		fmt.Println("没找到这个hash 对应的这个文件名")
 	}
+	// TODO It works after the following line added with no panci info but it still should have a better resolution to add hashfile obj into a.files map
+	a.GetFiles(hash)
 	if a.files[hash].reader == nil {
 		reader := f.NewReader()
 		a.files[hash].reader = reader
 	}
+	fmt.Println("zhe li ying gai you fan ying le", w.Header())
 	http.ServeContent(w, r, filename, time.Now(), a.files[hash].reader)
 }
 
