@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"peer2http/util"
@@ -207,6 +208,7 @@ func (a *App) ContentServer(w http.ResponseWriter, r *http.Request, hash string,
 		fmt.Println("没找到这个hash 对应的这个文件名")
 	}
 	// TODO It works after the following line added with no panci info but it still should have a better resolution to add hashfile obj into a.files map
+	// plan A
 	// a.GetFiles(hash)
 	// if a.files[hash].reader == nil {
 	// 	reader := f.NewReader()
@@ -214,7 +216,30 @@ func (a *App) ContentServer(w http.ResponseWriter, r *http.Request, hash string,
 	// }
 	// fmt.Println("zhe li ying gai you fan ying le", w.Header())
 	// http.ServeContent(w, r, filename, time.Now(), a.files[hash].reader)
-	http.ServeContent(w, r, filename, time.Now(), f.NewReader())
+
+	// plan B
+	fileReader := f.NewReader()
+	filelength := f.Length()
+	fip := f.FileInfo().Path
+	var name string
+	if len(fip) == 0 {
+		name = f.DisplayPath()
+	} else if len(fip) == 1 {
+		name = fip[0]
+	} else {
+		name = fip[len(fip)-1]
+	}
+	fmt.Println(filelength, name, "before serve http file")
+	if filelength > 0 {
+		fileReader.SetReadahead((filelength * 10) / 100)
+	}
+	w.Header().Set("Content-Disposition", `filename="`+url.PathEscape(name)+`"`)
+	_, err := fileReader.Seek(0, 0)
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer fileReader.Close()
+	http.ServeContent(w, r, filename, time.Now(), fileReader)
 }
 
 func (a *App) Close() {
