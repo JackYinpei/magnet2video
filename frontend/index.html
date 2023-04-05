@@ -1,31 +1,39 @@
-// 注册
-fetch('/register', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ username, password })
-}).then(response => response.json())
-  .then(data => {
-    const { token } = data;
-    // 将JWT token存储到本地存储中
-    localStorage.setItem('token', token);
-  });
-
-// 登录
-fetch('/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ username, password })
-}).then(response => response.json())
-  .then(data => {
-    const { token } = data;
-    // 将JWT token存储到本地存储中
-    localStorage.setItem('token', token);
-  });
-
-// 发送请求
-fetch('/api', {
-  headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-}).then(response => response.json())
-  .then(data => {
-    // 处理响应数据
-  });
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>User Login and Registration</title>
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <div id="login-form" class="form">
+      <h2>Login</h2>
+      <form>
+        <input type="text" placeholder="Username">
+        <input type="password" placeholder="Password">
+        <button type="submit">Login</button>
+      </form>
+    </div>
+    <div id="register-form" class="form">
+      <h2>Register</h2>
+      <form>
+        <input type="text" placeholder="Username">
+        <input type="password" placeholder="Password">
+        <button type="submit">Register</button>
+      </form>
+    </div>
+    <div id="file-list">
+      <h2>File List</h2>
+      <div id="magnet-list" class="list">
+        <h3>Magnet List</h3>
+        <ul>
+          <!-- The list of magnets will be dynamically generated here -->
+        </ul>
+      </div>
+      <div id="file-details" class="details">
+        <h3>File Details</h3>
+        <!-- The details of the selected magnet file will be dynamically generated here -->
+      </div>
+    </div>
+    <script src="script.js"></script>
+  </body>
+</html>
