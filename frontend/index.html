@@ -1,38 +1,21 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>User Login and Registration</title>
-    <link rel="stylesheet" href="/public/style.css">
+    <title>Login</title>
+    <link rel="stylesheet" type="text/css" href="/public/login.css">
   </head>
   <body>
-    <div id="login-form" class="form">
-      <h2>Login</h2>
-      <form>
-        <input type="text" placeholder="Username">
-        <input type="password" placeholder="Password">
+    <div class="container">
+      <h1>Login</h1>
+      <form onsubmit="login()">
+        <label for="username">Username:</label>
+        <input type="text" id="username" name="username" required>
+
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password" required>
+
         <button type="submit">Login</button>
       </form>
-    </div>
-    <div id="register-form" class="form">
-      <h2>Register</h2>
-      <form>
-        <input type="text" placeholder="Username">
-        <input type="password" placeholder="Password">
-        <button type="submit">Register</button>
-      </form>
-    </div>
-    <div id="file-list">
-      <h2>File List</h2>
-      <div id="magnet-list" class="list">
-        <h3>Magnet List</h3>
-        <ul>
-          <!-- The list of magnets will be dynamically generated here -->
-        </ul>
-      </div>
-      <div id="file-details" class="details">
-        <h3>File Details</h3>
-        <!-- The details of the selected magnet file will be dynamically generated here -->
-      </div>
     </div>
     <script src="/public/main.js"></script>
   </body>
