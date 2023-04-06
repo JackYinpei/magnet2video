@@ -9,11 +9,16 @@ import (
 func NewRouter() *gin.Engine {
 
 	Router := gin.Default()
+	Router.Static("/public", "./frontend")
 
 	// 中间件
 	// r.Use(middleware.Session(os.Getenv("SESSION_SECRET")))
 	// app.Router.Use(middleware.Cors())
 	// app.Router.Use(middleware.CurrentUser())
+	Router.LoadHTMLGlob("./frontend/*")
+	Router.GET("/", func(c *gin.Context) {
+		c.HTML(200, "index.html", gin.H{})
+	})
 	v1 := Router.Group("/api/v1")
 	{
 		v1.POST("ping", Ping)
