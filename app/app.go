@@ -18,6 +18,7 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"go.etcd.io/bbolt"
+	"golang.org/x/time/rate"
 )
 
 var AppObj *App
@@ -41,7 +42,9 @@ type App struct {
 	// bolt.DB 创建bolt.db 当服务器退出后重启，可以从bolt.db 里加载client 信息
 	db *bbolt.DB
 	// trackers add a torrent obj need add tracker
-	trackers [][]string
+	trackers    [][]string
+	PostLimiter rate.Limiter
+	PlayLimiter rate.Limiter
 }
 
 const (
@@ -68,6 +71,8 @@ func New(path string) (*App, error) {
 		torrentGetter: getter,
 		db:            loadDB,
 		trackers:      trackers,
+		PostLimiter:   *rate.NewLimiter(10, 100),
+		PlayLimiter:   *rate.NewLimiter(10, 100),
 	}
 	if err == nil {
 		AppObj.Load()

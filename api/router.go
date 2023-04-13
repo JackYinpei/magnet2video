@@ -34,8 +34,8 @@ func NewRouter() *gin.Engine {
 		// who am i
 		authed.GET("me", UserMe)
 
-		// add magnet to this user
-		authed.POST("magnet", AddMagnet)
+		// add magnet to this user and use limiter
+		authed.POST("magnet", middleware.PlayLimiter(), AddMagnet)
 
 		// TODO 可能要加一个中间件 来判断user 是不是own this magnet
 		// list all magnets which this user owns
