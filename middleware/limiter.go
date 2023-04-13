@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"peer2http/app"
 
 	"github.com/gin-gonic/gin"
@@ -8,10 +9,10 @@ import (
 
 func PlayLimiter() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		limiter := app.AppObj.PlayLimiter
-		if limiter.Allow() {
+		if app.AppObj.PlayLimiter.Allow() {
 			ctx.Next()
 		} else {
+			fmt.Println("限流了")
 			ctx.AbortWithStatusJSON(429, gin.H{"msg": "too many request"})
 		}
 	}

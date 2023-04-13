@@ -71,8 +71,8 @@ func New(path string) (*App, error) {
 		torrentGetter: getter,
 		db:            loadDB,
 		trackers:      trackers,
-		PostLimiter:   *rate.NewLimiter(10, 100),
-		PlayLimiter:   *rate.NewLimiter(10, 100),
+		PostLimiter:   *rate.NewLimiter(1, 1),
+		PlayLimiter:   *rate.NewLimiter(1, 1),
 	}
 	if err == nil {
 		AppObj.Load()
