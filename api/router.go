@@ -20,6 +20,7 @@ func NewRouter() *gin.Engine {
 		c.HTML(200, "index.html", gin.H{})
 	})
 	v1 := Router.Group("/api/v1")
+	v1.Use(middleware.PlayLimiter())
 	{
 		v1.POST("ping", Ping)
 
@@ -35,7 +36,7 @@ func NewRouter() *gin.Engine {
 		authed.GET("me", UserMe)
 
 		// add magnet to this user and use limiter
-		authed.POST("magnet", middleware.PlayLimiter(), AddMagnet)
+		authed.POST("magnet", AddMagnet)
 
 		// TODO 可能要加一个中间件 来判断user 是不是own this magnet
 		// list all magnets which this user owns

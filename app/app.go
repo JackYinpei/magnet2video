@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -82,6 +83,26 @@ func New(path string) (*App, error) {
 		panic("load db faild")
 	}
 	return AppObj, nil
+}
+
+// background task to delete AppObj.files
+func Background() context.CancelFunc {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		for {
+			select {
+			case <-ticker.C:
+				AppObj.mu.Lock()
+				// delete selected k and v TODO
+				AppObj.mu.Unlock()
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+	return cancel
 }
 
 func (a *App) Load() error {
