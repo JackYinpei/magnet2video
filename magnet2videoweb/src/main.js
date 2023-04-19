@@ -7,9 +7,6 @@ createApp(App).mount('#app')
 
 import Vue from 'vue';
 import VueRouter from 'vue-router';
-import Login from './components/loginpage.vue';
-import UserInfo from './components/userinfo.vue';
-
 Vue.use(VueRouter);
 
 const router = new VueRouter({

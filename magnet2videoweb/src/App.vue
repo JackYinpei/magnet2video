@@ -1,7 +1,11 @@
-<script setup>
-import HelloWorld from './components/HelloWorld.vue'
-import TheWelcome from './components/TheWelcome.vue'
-import Login from './components/loginpage.vue'
+<script>
+import ToDoItem from './components/ToDoItem.vue'
+export default {
+  name: 'app',
+  components: {
+    ToDoItem
+  }
+}
 </script>
 
 <template>
@@ -12,10 +16,14 @@ import Login from './components/loginpage.vue'
       <HelloWorld msg="You did it!" />
     </div>
   </header>
-
-  <main>
-    <Login></Login>
-  </main>
+  <div id="app">
+    <h1>ToDoList</h1>
+    <ul>
+      <li>
+        <ToDoItem></ToDoItem>
+      </li>
+    </ul>
+  </div>
 </template>
 
 <style scoped>
