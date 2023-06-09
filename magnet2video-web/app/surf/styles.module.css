@@ -1,0 +1,18 @@
+.container {
+    display: grid;
+    grid-template-columns: 2fr  3fr;
+    column-gap: 10px;
+}
+
+.header {
+    grid-row: 1;
+    border-radius: 5px;
+    padding: 10px;
+    background-color: rgb(207, 232, 220);
+    border: 2px solid rgb(79, 185, 227);
+    margin-bottom: 10px;
+}
+
+.aside {
+    border-right: 2px solid #999;
+}

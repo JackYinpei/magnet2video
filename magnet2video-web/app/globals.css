@@ -1,0 +1,15 @@
+.grid-container {
+  display: grid;
+  grid-template-columns: 1fr 10px 1fr;
+}
+
+.grid-container > div {
+  background-color: rgba(219, 151, 151, 0.8);
+  border-radius: 5px;
+  border: 2px solid red;
+}
+
+.aside {
+  border-right: 1px solid #999;
+  height: 650px;
+}

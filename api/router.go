@@ -16,8 +16,12 @@ func NewRouter() *gin.Engine {
 	// app.Router.Use(middleware.Cors())
 	// app.Router.Use(middleware.CurrentUser())
 	Router.LoadHTMLGlob("./frontend/*")
-	Router.GET("/", func(c *gin.Context) {
-		c.HTML(200, "index.html", gin.H{})
+	// Router.GET("/", func(c *gin.Context) {
+	// 	c.HTML(200, "index.html", gin.H{})
+	// })
+	v2 := Router.Group("/v2")
+	v2.POST("list", func(ctx *gin.Context) {
+		ctx.JSON(200, gin.H{"a": "a", "b": "b", "c": "c"})
 	})
 	v1 := Router.Group("/api/v1")
 	v1.Use(middleware.PlayLimiter())
