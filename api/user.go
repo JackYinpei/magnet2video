@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 	"peer2http/serializer"
 	"peer2http/service"
 	"time"
@@ -56,10 +57,16 @@ func UserLogin(c *gin.Context) {
 					Msg:    "内部错误",
 				})
 			}
-			// res := serializer.BuildUserResponse(user)
-			c.JSON(200, gin.H{
-				"token": tokenString,
+			// return token in response header
+			c.Header("Authorization", tokenString)
+			c.JSON(200,gin.H{
+				"haojiahuo": "haojiahuo",
 			})
+			// redirect to index page
+			c.Redirect(http.StatusMovedPermanently, "/")
+			// c.JSON(200, gin.H{
+			// 	"token": tokenString,
+			// })
 		}
 	} else {
 		c.JSON(200, ErrResponse(err))
