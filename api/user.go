@@ -59,7 +59,7 @@ func UserLogin(c *gin.Context) {
 			}
 			// return token in response header
 			c.Header("Authorization", tokenString)
-			c.JSON(200,gin.H{
+			c.JSON(200, gin.H{
 				"haojiahuo": "haojiahuo",
 			})
 			// redirect to index page
@@ -69,6 +69,7 @@ func UserLogin(c *gin.Context) {
 			// })
 		}
 	} else {
+		fmt.Println("用户账号密码错误，登录失败")
 		c.JSON(200, ErrResponse(err))
 	}
 }

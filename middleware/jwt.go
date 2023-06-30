@@ -31,6 +31,7 @@ func JwtVerify() gin.HandlerFunc {
 		})
 
 		if err != nil {
+			fmt.Println(err, "验证token失败，然后应该直接就返回了，不应该再继续请求其他方法了的", authHeader, tokenString)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, serializer.Response{
 				Status: 40001,
 				Msg:    "invalid token",
