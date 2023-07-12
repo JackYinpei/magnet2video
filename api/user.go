@@ -57,13 +57,22 @@ func UserLogin(c *gin.Context) {
 					Msg:    "内部错误",
 				})
 			}
-			// return token in response header
-			c.Header("Authorization", tokenString)
-			c.JSON(200, gin.H{
-				"haojiahuo": "haojiahuo",
+			c.JSON(http.StatusOK, serializer.Response{
+				Status: 200000,
+				Msg:    "登录ok 返回token",
+				Data: gin.H{
+					"Authorization": "Bearer:" + tokenString,
+					"username":      user.Username,
+				},
+				Error: "",
 			})
+			// return token in response header
+			// c.Header("Authorization", "Bearer "+tokenString)
+			// c.JSON(200, gin.H{
+			// 	"haojiahuo": "haojiahuo",
+			// })
 			// redirect to index page
-			c.Redirect(http.StatusMovedPermanently, "/")
+			// c.Redirect(http.StatusMovedPermanently, "/")
 			// c.JSON(200, gin.H{
 			// 	"token": tokenString,
 			// })
@@ -84,6 +93,7 @@ func UserMe(c *gin.Context) {
 		})
 	} else {
 		res := serializer.BuildUserResponse(*user)
+		fmt.Printf("%v 奇了怪 这应该有信息的呀\n", res)
 		c.JSON(200, res)
 	}
 }
