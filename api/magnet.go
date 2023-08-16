@@ -20,7 +20,7 @@ func AddMagnet(c *gin.Context) {
 	}
 	if err := c.ShouldBind(&service); err == nil {
 		// here add magnet obj to app map
-		err := app.AppObj.AddMagnet(service.Magnet)
+		err, files := app.AppObj.AddMagnet(service.Magnet)
 		if err != nil {
 			c.JSON(500, serializer.Response{
 				Status: 50000,
@@ -30,6 +30,7 @@ func AddMagnet(c *gin.Context) {
 		} else {
 			fmt.Println("下一步 添加这个magnet 到数据库")
 			res := service.Create(uint(userid.(float64)))
+			res.Data = files
 			c.JSON(200, res)
 		}
 	} else {

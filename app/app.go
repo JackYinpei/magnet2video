@@ -148,7 +148,7 @@ func (a *App) Load() error {
 	})
 }
 
-func (a *App) AddMagnet(magnet string) error {
+func (a *App) AddMagnet(magnet string) (error, []string) {
 	fmt.Println(magnet, "magnet is going to add into client")
 	a.torrentGetter.SetMagnet(magnet)
 	fmt.Println("Get magnet torrent file done")
@@ -156,23 +156,23 @@ func (a *App) AddMagnet(magnet string) error {
 	filename := a.torrentGetter.GetTorrent()
 	if filename == "" {
 		fmt.Println("获取这个magnet 对应的torrent file失败")
-		return errors.New("cannot find this magnet corresponding torrent")
+		return errors.New("cannot find this magnet corresponding torrent"), nil
 	}
 	// Get torrent by magnet should insensible
-	err := a.GetTorrent(filename)
+	err, files := a.GetTorrent(filename)
 	if err != nil {
-		return err
+		return errors.New("Get Torrent file error for" + err.Error()), nil
 	}
 
-	return nil
+	return nil, files
 }
 
-func (a *App) GetTorrent(filename string) error {
+func (a *App) GetTorrent(filename string) (err error, files []string) {
 	// 将通过magnet 下载的torrent 文件 获取到torrent 对象
 	t, err := a.client.AddTorrentFromFile(filename)
 	if err != nil {
 		fmt.Println("解析torrent 文件失败 因为：", err)
-		return err
+		return err, nil
 	}
 	// get torrent file hash which is just downloaded by magnet and add torrent obj to app
 	// this filename is download path with join torrent file name such as C:\goproj\peer2HttpDemo\torrents/
@@ -195,6 +195,7 @@ func (a *App) GetTorrent(filename string) error {
 	err = a.db.Update(func(tx *bbolt.Tx) error {
 		var b = tx.Bucket([]byte(dbBucketInfo))
 		fmt.Println("Here put t.InfoHash().Bytes() into db torrentInfoName: ", t.Info().Name, "here is magnet hash", hash)
+		fmt.Println("Not only t.Info().Name", t.Info().Files, "t.Info().Files")
 		// TODO I want to put magnet hash as key Done!
 		// return b.Put(t.InfoHash().Bytes(), buf.Bytes())
 		return b.Put([]byte(hash), buf.Bytes())
@@ -206,7 +207,7 @@ func (a *App) GetTorrent(filename string) error {
 	t.AddTrackers(a.trackers)
 	a.torrents[hash] = t
 	a.mu.Unlock()
-	return nil
+	return nil, a.GetFiles(hash)
 }
 
 func (a *App) GetFiles(hash string) []string {
