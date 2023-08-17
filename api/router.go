@@ -15,7 +15,8 @@ func NewRouter() *gin.Engine {
 	// r.Use(middleware.Session(os.Getenv("SESSION_SECRET")))
 	// app.Router.Use(middleware.Cors())
 	// app.Router.Use(middleware.CurrentUser())
-	Router.LoadHTMLGlob("./frontend/*")
+	// TODO 以后看看把前端东西打包下都放这里
+	// Router.LoadHTMLGlob("./frontend/*")
 	// Router.GET("/", func(c *gin.Context) {
 	// 	c.HTML(200, "index.html", gin.H{})
 	// })

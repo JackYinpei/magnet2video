@@ -19,13 +19,11 @@ export default function RootLayout({ children }) {
       <body>
         <ThemeProvider>
             <AuthProvider>
-              {/* <Script src="https://cdn.jsdelivr.net/npm/webtorrent/webtorrent.min.js" strategy="afterInteractive" onLoad={()=>{console.log("haojiahuo")}}> */}
-                <div className="container">
-                    <Navbar/>
-                      {children}
-                    <Footer/>
-                  </div>
-              {/* </Script> */}
+              <div className="container">
+                <Navbar/>
+                  {children}
+                <Footer/>
+              </div>
             </AuthProvider>
         </ThemeProvider>      
       </body>
