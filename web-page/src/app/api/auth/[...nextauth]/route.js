@@ -18,7 +18,7 @@ const handler = NextAuth({
             password: credentials.password,
           }),
         }).then((res) => {
-          console.log("后端返回成功")
+          console.log("后端返回成功", res)
           return res.json()
         }).catch((err) => {
           console.log("登陆失败: ", err)

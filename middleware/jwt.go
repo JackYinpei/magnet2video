@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"peer2http/serializer"
 
@@ -19,6 +20,8 @@ func JwtVerify() gin.HandlerFunc {
 		if authHeader == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing Authorization header"})
 		}
+
+		log.Println(authHeader, "这是authHeader")
 
 		tokenString := authHeader[7:]
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
