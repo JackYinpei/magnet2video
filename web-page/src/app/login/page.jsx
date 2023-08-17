@@ -8,12 +8,15 @@ function Login(){
     const router = useRouter()
     const {data: session, status} = useSession();
 
+    if (status === "loading") return <p>Loading...</p>
+    if (status === "authenticated") router.push("/")
+
     const handleSubmit = (e) =>{
         e.preventDefault();
         const username = e.target[0].value;
         const password = e.target[1].value;
         signIn("credentials", {username, password})
-        
+
     }
 
     return (
