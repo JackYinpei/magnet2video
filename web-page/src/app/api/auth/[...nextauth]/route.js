@@ -8,7 +8,7 @@ const handler = NextAuth({
       id: 'credentials',
       name: 'Credentials',
       async authorize(credentials) {
-        const resp = await fetch("http://localhost:80/goapi/v1/user/login", {
+        const resp = await fetch("http://101.35.200.143/goapi/v1/user/login", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -22,7 +22,7 @@ const handler = NextAuth({
           return res.json()
         }).catch((err) => {
           console.log("登陆失败: ", err)
-          return err.json()
+          return err
         })
         if (resp.status === 200000) {
           const token = resp.data.Authorization
