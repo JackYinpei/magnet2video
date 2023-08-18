@@ -3,36 +3,34 @@
 import { useState } from 'react'
 import { useSession } from 'next-auth/react'
 import styles from './page.module.css'
+import axios from 'axios'
+
 export default function Home() {
 
-  async function getFiles(token, magnet) {
-    const res = await fetch("/goapi/v1/magnet", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": token,
-      },
-      body: JSON.stringify({magnet: magnet}),
-    })
-
-    if (!res.ok) {
-      throw new Error(`Failed to fetch: ${res.status}`)
-    }
-    return res.json()
-  }
-
   const {data, status} = useSession()
-  console.log(data, status, "data, status")
   const [inputValue, setInputValue] = useState('')
-  const [respjson, setRespjson] = useState({})
+  const [loadOk, setLoadOK] = useState(false)
+  const [files, setFiles] = useState([])
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault()
-    console.log(inputValue, "鼠标点击")
     const magnet = inputValue
     const token = data.user.email
-    const resp = await getFiles(token, magnet)
-    console.log(respjson, "respjson")
+
+    axios.defaults.headers.common['Authorization'] = token
+    axios.defaults.headers.common['Content-Type'] = 'application/json'
+    axios.post('/goapi/v1/magnet',{
+      magnet: String(magnet)
+    }).then((res) => {
+      if (res.data.status !== 40001) {
+        setLoadOK(true)
+        setFiles(res.data.data.files)
+        console.log(files, "files checkout is ok", res.data.data.files, "kankanzhege")
+      }
+    }).catch((err) => {
+      console.log("返回文件失败", err)
+      return err
+    })
   }
 
   
@@ -45,6 +43,14 @@ export default function Home() {
         <button type="submit" className={styles.button} onClick={handleSubmit} >Now</button>
       </div>
       }
+      {loadOk && files.length > 0 &&
+        <div>
+          <ol>
+            {files.forEach((file) => {
+              return <li>{file}</li>
+            })}
+          </ol>
+        </div>}
     </div>
   )
 }

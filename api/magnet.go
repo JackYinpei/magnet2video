@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"log"
 	"peer2http/app"
 	"peer2http/serializer"
 	"peer2http/service"
@@ -30,7 +31,11 @@ func AddMagnet(c *gin.Context) {
 		} else {
 			fmt.Println("下一步 添加这个magnet 到数据库")
 			res := service.Create(uint(userid.(float64)))
-			res.Data = files
+			fileStruct := gin.H{
+				"files": files,
+			}
+			res.Data = fileStruct
+			log.Printf("%v files, Type %T, 第一个%T, \nres %v", files, files, files[0], res)
 			c.JSON(200, res)
 		}
 	} else {

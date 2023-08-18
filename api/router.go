@@ -21,11 +21,12 @@ func NewRouter() *gin.Engine {
 	// 	c.HTML(200, "index.html", gin.H{})
 	// })
 	v2 := Router.Group("/v2")
+	v2.Use(middleware.Cors())
 	v2.POST("list", func(ctx *gin.Context) {
 		ctx.JSON(200, gin.H{"a": "a", "b": "b", "c": "c"})
 	})
 	v1 := Router.Group("/api/v1")
-	v1.Use(middleware.PlayLimiter())
+	v1.Use(middleware.Cors(), middleware.PlayLimiter())
 	{
 		v1.POST("ping", Ping)
 
