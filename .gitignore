@@ -11,6 +11,8 @@ tmp/
 /database/
 configs/config.local.yml
 configs/config.prod.yml
+/download
+magnet
 
 # IDE
 .vscode/

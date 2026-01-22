@@ -6,5 +6,15 @@
   "10005": "{{.resource}} not found: {{.id}}",
   "10006": "{{.resource}} already exists: {{.id}}",
   "10007": "too many requests: {{.limit}} per {{.period}}",
-  "10008": "service unavailable: {{.service}}"
+  "10008": "service unavailable: {{.service}}",
+  "20001": "invalid magnet URI: {{.msg}}",
+  "20002": "torrent not found: {{.info_hash}}",
+  "20003": "torrent already exists: {{.info_hash}}",
+  "20004": "torrent is currently downloading: {{.info_hash}}",
+  "20005": "failed to parse torrent metadata: {{.msg}}",
+  "20006": "failed to add torrent: {{.msg}}",
+  "20007": "failed to remove torrent: {{.msg}}",
+  "20008": "no files selected for download",
+  "20009": "file not found: {{.path}}",
+  "20010": "file is not streamable: {{.path}}"
 }

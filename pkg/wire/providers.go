@@ -11,6 +11,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
 	"github.com/Done-0/gin-scaffold/internal/sse"
+	"github.com/Done-0/gin-scaffold/internal/torrent"
 
 	// "github.com/Done-0/gin-scaffold/internal/queue"
 
@@ -28,6 +29,7 @@ var InfrastructureProviders = wire.NewSet(
 	// queue.NewProducer,
 	redis.New,
 	sse.New,
+	torrent.New,
 )
 
 // MapperProviders provides data access layer dependencies
@@ -36,11 +38,13 @@ var MapperProviders = wire.NewSet()
 // ServiceProviders provides business logic layer dependencies
 var ServiceProviders = wire.NewSet(
 	impl.NewTestService,
+	impl.NewTorrentService,
 )
 
 // ControllerProviders provides controller layer dependencies
 var ControllerProviders = wire.NewSet(
 	controller.NewTestController,
+	controller.NewTorrentController,
 )
 
 // AllProviders combines all provider sets in dependency order
@@ -50,3 +54,4 @@ var AllProviders = wire.NewSet(
 	ServiceProviders,
 	ControllerProviders,
 )
+

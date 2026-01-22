@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magnet Video</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app">
+        <!-- 导航栏 -->
+        <nav class="navbar">
+            <div class="logo">📺 Magnet Video</div>
+            <div class="nav-links">
+                <a href="#" class="nav-link active" data-page="library">媒体库</a>
+                <a href="#" class="nav-link" data-page="add">添加</a>
+                <a href="#" class="nav-link" data-page="downloads">下载</a>
+            </div>
+        </nav>
+
+        <!-- 主内容区域 -->
+        <main class="main-content">
+            <!-- 媒体库页面 (海报墙) -->
+            <div id="page-library" class="page active">
+                <h2>媒体库</h2>
+                <div id="library-grid" class="poster-grid">
+                    <div class="empty-state">
+                        <p>暂无媒体，点击"添加"开始下载</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 添加页面 -->
+            <div id="page-add" class="page">
+                <h2>添加磁力链接</h2>
+                <div class="add-form">
+                    <div class="form-group">
+                        <label>磁力链接</label>
+                        <textarea id="magnet-input" placeholder="magnet:?xt=urn:btih:..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>自定义 Tracker (可选，每行一个)</label>
+                        <textarea id="tracker-input" placeholder="udp://tracker.example.com:1337/announce"></textarea>
+                    </div>
+                    <button id="parse-btn" class="btn btn-primary">解析</button>
+                </div>
+
+                <!-- 文件选择区域 -->
+                <div id="file-selection" class="file-selection hidden">
+                    <h3 id="torrent-name">种子名称</h3>
+                    <p id="torrent-size">总大小: 0 MB</p>
+                    <div class="file-actions">
+                        <button id="select-all-btn" class="btn btn-sm">全选</button>
+                        <button id="select-none-btn" class="btn btn-sm">取消全选</button>
+                        <button id="select-video-btn" class="btn btn-sm">仅视频</button>
+                    </div>
+                    <div id="file-list" class="file-list"></div>
+                    <div class="form-actions">
+                        <button id="download-btn" class="btn btn-primary">开始下载</button>
+                        <button id="cancel-btn" class="btn">取消</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 下载页面 -->
+            <div id="page-downloads" class="page">
+                <h2>下载任务</h2>
+                <div id="downloads-list" class="downloads-list">
+                    <div class="empty-state">
+                        <p>暂无下载任务</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 播放器页面 -->
+            <div id="page-player" class="page">
+                <div class="player-header">
+                    <button id="back-btn" class="btn">← 返回</button>
+                    <h2 id="player-title">正在播放</h2>
+                </div>
+                <div class="player-container">
+                    <video id="video-player" controls>
+                        Your browser does not support the video tag.
+                    </video>
+                </div>
+                <div id="player-files" class="player-files"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast 通知 -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- 加载遮罩 -->
+    <div id="loading" class="loading hidden">
+        <div class="spinner"></div>
+        <p>加载中...</p>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -14,6 +14,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/logger"
 	"github.com/Done-0/gin-scaffold/internal/redis"
 	"github.com/Done-0/gin-scaffold/internal/sse"
+	"github.com/Done-0/gin-scaffold/internal/torrent"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller"
 	"github.com/Done-0/gin-scaffold/pkg/serve/service/impl"
 )
@@ -22,7 +23,7 @@ import (
 
 // NewContainer initializes the complete application container using Wire
 func NewContainer(config *configs.Config) (*Container, error) {
-	manager, err := ai.New(config)
+	v, err := ai.New(config)
 	if err != nil {
 		return nil, err
 	}
@@ -37,17 +38,25 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	}
 	i18nManager := i18n.New()
 	sseManager := sse.New(config)
-	testService := impl.NewTestService(loggerManager, redisManager, manager)
+	torrentManager, err := torrent.New(config)
+	if err != nil {
+		return nil, err
+	}
+	testService := impl.NewTestService(loggerManager, redisManager, v)
 	testController := controller.NewTestController(testService, sseManager)
+	torrentService := impl.NewTorrentService(loggerManager, databaseManager, torrentManager)
+	torrentController := controller.NewTorrentController(torrentService)
 	container := &Container{
-		Config:          config,
-		AIManager:       manager,
-		DatabaseManager: databaseManager,
-		RedisManager:    redisManager,
-		LoggerManager:   loggerManager,
-		I18nManager:     i18nManager,
-		SSEManager:      sseManager,
-		TestController:  testController,
+		Config:            config,
+		AIManager:         v,
+		DatabaseManager:   databaseManager,
+		RedisManager:      redisManager,
+		LoggerManager:     loggerManager,
+		I18nManager:       i18nManager,
+		SSEManager:        sseManager,
+		TorrentManager:    torrentManager,
+		TestController:    testController,
+		TorrentController: torrentController,
 	}
 	return container, nil
 }
@@ -65,7 +74,9 @@ type Container struct {
 	LoggerManager   logger.LoggerManager
 	I18nManager     i18n.I18nManager
 	SSEManager      sse.SSEManager
+	TorrentManager  torrent.TorrentManager
 
 	// Controllers
-	TestController *controller.TestController
+	TestController    *controller.TestController
+	TorrentController *controller.TorrentController
 }

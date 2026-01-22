@@ -20,4 +20,5 @@ func New(r *gin.Engine, container *wire.Container) {
 
 	// Register routes by modules
 	routes.RegisterTestRoutes(container, v1, v2)
+	routes.RegisterTorrentRoutes(container, v1, v2)
 }

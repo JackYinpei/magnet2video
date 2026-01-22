@@ -14,6 +14,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
 	"github.com/Done-0/gin-scaffold/internal/sse"
+	"github.com/Done-0/gin-scaffold/internal/torrent"
 
 	// "github.com/Done-0/gin-scaffold/internal/queue"
 
@@ -32,10 +33,12 @@ type Container struct {
 	LoggerManager   logger.LoggerManager
 	I18nManager     i18n.I18nManager
 	SSEManager      sse.SSEManager
+	TorrentManager  torrent.TorrentManager
 	// QueueProducer   queue.Producer
 
 	// Controllers
-	TestController *controller.TestController
+	TestController    *controller.TestController
+	TorrentController *controller.TorrentController
 
 	// Services
 
@@ -49,3 +52,4 @@ func NewContainer(config *configs.Config) (*Container, error) {
 		wire.Struct(new(Container), "*"),
 	))
 }
+

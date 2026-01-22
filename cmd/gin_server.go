@@ -19,6 +19,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/middleware"
 	"github.com/Done-0/gin-scaffold/pkg/router"
 	"github.com/Done-0/gin-scaffold/pkg/wire"
+	"github.com/Done-0/gin-scaffold/web"
 )
 
 // Start starts the HTTP server with graceful shutdown handling
@@ -53,6 +54,9 @@ func Start() {
 	}
 	defer container.RedisManager.Close()
 
+	// Close torrent manager on shutdown
+	defer container.TorrentManager.Close()
+
 	// MQ consumers
 	go func() {
 		// TODO: Add specific consumer startup logic here
@@ -73,6 +77,9 @@ func Start() {
 	r := gin.New()
 	middleware.New(r, cfgs)
 	router.New(r, container)
+
+	// Register static file routes for embedded frontend
+	web.RegisterStaticRoutes(r)
 
 	// Create HTTP server
 	serverAddr := fmt.Sprintf("%s:%s", cfgs.AppConfig.AppHost, cfgs.AppConfig.AppPort)
