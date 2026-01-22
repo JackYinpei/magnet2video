@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: gin-app
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./download:/app/download
+      - ./configs:/app/configs
+      - ./.logs:/app/.logs
+    environment:
+      - ENV=${APP_ENV:-prod}
+      - DATABASE_DB_HOST=${DB_HOST:-mysql}
+      - DATABASE_DB_PORT=${DB_PORT:-3306}
+      - DATABASE_DB_USER=${DB_USER:-root}
+      - DATABASE_DB_PSW=${DB_PASSWORD:-rootpassword}
+      - DATABASE_DB_NAME=${DB_NAME:-gin-scaffold_db}
+      - REDIS_REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_REDIS_PSW=${REDIS_PASSWORD}
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - app-network
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-gin-scaffold_db}
+      MYSQL_USER: ${DB_USER:-root}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-rootpassword}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - app-network
+
+  redis:
+    image: redis:alpine
+    container_name: redis-cache
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:

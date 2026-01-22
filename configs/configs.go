@@ -159,6 +159,8 @@ var (
 // - ENV=prod uses production configuration
 func New() error {
 	v = viper.New()
+	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	env := os.Getenv("ENV")
 	var configPath string
