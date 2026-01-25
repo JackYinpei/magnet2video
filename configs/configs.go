@@ -132,14 +132,24 @@ type AIConfig struct {
 	Prompt    PromptConfig              `mapstructure:"PROMPT"`    // Prompt template configuration
 }
 
+// TorrentConfig torrent client configuration
+type TorrentConfig struct {
+	DownloadDir       string `mapstructure:"DOWNLOAD_DIR"`        // Download directory
+	UploadRateLimit   int    `mapstructure:"UPLOAD_RATE_LIMIT"`   // Upload rate limit in KB/s, 0 = unlimited
+	DownloadRateLimit int    `mapstructure:"DOWNLOAD_RATE_LIMIT"` // Download rate limit in KB/s, 0 = unlimited
+	EnableSeeding     bool   `mapstructure:"ENABLE_SEEDING"`      // Whether to enable seeding after download
+	ListenPort        int    `mapstructure:"LISTEN_PORT"`         // BT listen port for P2P connections
+}
+
 // Config main configuration structure
 type Config struct {
-	AppConfig   AppConfig      `mapstructure:"APP"`      // Application configuration
-	DBConfig    DatabaseConfig `mapstructure:"DATABASE"` // Database configuration
-	LogConfig   LogConfig      `mapstructure:"LOG"`      // Logging configuration
-	RedisConfig RedisConfig    `mapstructure:"REDIS"`    // Redis configuration
-	KafkaConfig KafkaConfig    `mapstructure:"KAFKA"`    // Kafka configuration
-	AI          AIConfig       `mapstructure:"AI"`       // AI service configuration
+	AppConfig     AppConfig      `mapstructure:"APP"`      // Application configuration
+	DBConfig      DatabaseConfig `mapstructure:"DATABASE"` // Database configuration
+	LogConfig     LogConfig      `mapstructure:"LOG"`      // Logging configuration
+	RedisConfig   RedisConfig    `mapstructure:"REDIS"`    // Redis configuration
+	KafkaConfig   KafkaConfig    `mapstructure:"KAFKA"`    // Kafka configuration
+	AI            AIConfig       `mapstructure:"AI"`       // AI service configuration
+	TorrentConfig TorrentConfig  `mapstructure:"TORRENT"` // Torrent client configuration
 }
 
 // Configuration file path constants

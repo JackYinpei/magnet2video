@@ -90,30 +90,44 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 		return nil, err
 	}
 
-	// Get progress to retrieve torrent info
-	progress, err := client.GetProgress(req.InfoHash)
+	// Get torrent info including files
+	torrentInfo, err := client.GetTorrentInfo(req.InfoHash)
 	if err != nil {
-		ts.loggerManager.Logger().Errorf("failed to get progress: %v", err)
+		ts.loggerManager.Logger().Errorf("failed to get torrent info: %v", err)
 		return nil, err
+	}
+
+	// Build selected files map
+	selectedMap := make(map[int]bool)
+	for _, idx := range req.SelectedFiles {
+		selectedMap[idx] = true
+	}
+
+	// Convert to model files with selection status
+	files := make(torrentModel.TorrentFiles, len(torrentInfo.Files))
+	for i, f := range torrentInfo.Files {
+		files[i] = torrentModel.TorrentFile{
+			Path:         f.Path,
+			Size:         f.Size,
+			IsSelected:   selectedMap[i],
+			IsShareable:  false,
+			IsStreamable: f.IsStreamable,
+		}
 	}
 
 	// Check if torrent already exists in database
 	var existingTorrent torrentModel.Torrent
 	result := ts.dbManager.DB().Where("info_hash = ?", req.InfoHash).First(&existingTorrent)
 
+	// Get current user ID from context
+	userID := auth.GetUserID(c)
+
 	if result.Error == gorm.ErrRecordNotFound {
 		// Create new torrent record
-		files := make(torrentModel.TorrentFiles, 0)
-		// We would need to get file info from the client here
-		// For now, we'll update this when we have more info
-
-		// Get current user ID from context
-		userID := auth.GetUserID(c)
-
 		newTorrent := &torrentModel.Torrent{
 			InfoHash:     req.InfoHash,
-			Name:         progress.Name,
-			TotalSize:    progress.TotalSize,
+			Name:         torrentInfo.Name,
+			TotalSize:    torrentInfo.TotalSize,
 			Files:        files,
 			DownloadPath: "./download",
 			Status:       torrentModel.StatusDownloading,
@@ -129,15 +143,13 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 		}
 	} else if result.Error == nil {
 		// Update existing record - may be a soft-deleted record being re-added
-		// Get current user ID from context
-		userID := auth.GetUserID(c)
-
-		// Update the record: reset deleted flag, update status and user
+		// Update the record: reset deleted flag, update status, files and user
 		updates := map[string]any{
 			"status":     torrentModel.StatusDownloading,
 			"deleted":    false,
-			"name":       progress.Name,
-			"total_size": progress.TotalSize,
+			"name":       torrentInfo.Name,
+			"total_size": torrentInfo.TotalSize,
+			"files":      files,
 		}
 
 		// Update creator_id only if it was 0 or if this user is adding it

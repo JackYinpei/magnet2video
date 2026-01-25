@@ -15,6 +15,7 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	"golang.org/x/time/rate"
 
 	"github.com/Done-0/gin-scaffold/configs"
 )
@@ -91,7 +92,11 @@ type Manager struct {
 
 // NewManager creates a new torrent manager
 func NewManager(config *configs.Config) (*Manager, error) {
-	downloadDir := "./download"
+	// Use config or default values
+	downloadDir := config.TorrentConfig.DownloadDir
+	if downloadDir == "" {
+		downloadDir = "./download"
+	}
 
 	// Ensure download directory exists
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
@@ -101,8 +106,34 @@ func NewManager(config *configs.Config) (*Manager, error) {
 	// Configure the torrent client
 	clientConfig := torrent.NewDefaultClientConfig()
 	clientConfig.DataDir = downloadDir
-	clientConfig.NoUpload = false
-	clientConfig.Seed = true
+
+	// Configure seeding
+	clientConfig.NoUpload = !config.TorrentConfig.EnableSeeding
+	clientConfig.Seed = config.TorrentConfig.EnableSeeding
+
+	// Configure listen port
+	if config.TorrentConfig.ListenPort > 0 {
+		clientConfig.ListenPort = config.TorrentConfig.ListenPort
+	}
+
+	// Configure upload rate limit (KB/s -> bytes/s)
+	if config.TorrentConfig.UploadRateLimit > 0 {
+		bytesPerSec := config.TorrentConfig.UploadRateLimit * 1024
+		clientConfig.UploadRateLimiter = rate.NewLimiter(
+			rate.Limit(bytesPerSec),
+			bytesPerSec, // burst size equals to rate for smooth limiting
+		)
+	}
+
+	// Configure download rate limit (KB/s -> bytes/s)
+	if config.TorrentConfig.DownloadRateLimit > 0 {
+		bytesPerSec := config.TorrentConfig.DownloadRateLimit * 1024
+		clientConfig.DownloadRateLimiter = rate.NewLimiter(
+			rate.Limit(bytesPerSec),
+			bytesPerSec,
+		)
+	}
+
 	// Use file-based storage to avoid SQLite-related conflicts with mattn/go-sqlite3
 	clientConfig.DefaultStorage = storage.NewFile(downloadDir)
 
@@ -282,6 +313,42 @@ func (c *Client) StartDownload(ctx context.Context, infoHash string, selectedFil
 	}
 
 	return nil
+}
+
+// GetTorrentInfo returns torrent information for an existing torrent
+func (c *Client) GetTorrentInfo(infoHash string) (*TorrentInfo, error) {
+	c.mu.RLock()
+	t, exists := c.torrents[infoHash]
+	c.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("torrent not found: %s", infoHash)
+	}
+
+	info := t.Info()
+	if info == nil {
+		return nil, fmt.Errorf("torrent metadata not available: %s", infoHash)
+	}
+
+	torrentInfo := &TorrentInfo{
+		InfoHash:  infoHash,
+		Name:      t.Name(),
+		TotalSize: info.TotalLength(),
+		NumPieces: info.NumPieces(),
+		PieceSize: info.PieceLength,
+	}
+
+	// Get files information
+	for _, file := range t.Files() {
+		fileInfo := FileInfo{
+			Path:         file.DisplayPath(),
+			Size:         file.Length(),
+			IsStreamable: isStreamableFile(file.DisplayPath()),
+		}
+		torrentInfo.Files = append(torrentInfo.Files, fileInfo)
+	}
+
+	return torrentInfo, nil
 }
 
 // GetProgress returns the download progress for a torrent
