@@ -101,3 +101,8 @@ go run main.go
 ## 许可证
 
 本项目采用 Apache License 2.0 协议开源
+
+DOCKER COMPOSE 启动命令
+``` bash
+sudo docker-compose --env-file .docker.env up -d
+```
