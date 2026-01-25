@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Docker
+.dockerignore
+docker-compose.yml
+.env
+.local.env
+.docker.env
+.local.env.example
+.docker.env.example
+
+# Build artifacts
+server
+
+# Data directories (IMPORTANT: Exclude download to speed up build)
+download
+download/
+database
+database/
+.logs
+.logs/
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
