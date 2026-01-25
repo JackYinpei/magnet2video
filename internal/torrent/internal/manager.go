@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"io"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -611,6 +612,58 @@ func (c *Client) GetFilePath(infoHash string, filePath string) (string, error) {
 	}
 
 	return fullPath, nil
+}
+
+// GetFileReader returns a reader for the file and its info, supporting fuzzy path matching
+func (c *Client) GetFileReader(infoHash string, filePath string) (io.ReadSeeker, *FileInfo, error) {
+	c.mu.RLock()
+	t, exists := c.torrents[infoHash]
+	c.mu.RUnlock()
+
+	if !exists {
+		return nil, nil, fmt.Errorf("torrent not found: %s", infoHash)
+	}
+
+	// Find the file in the torrent
+	var foundFile *torrent.File
+	
+	// First pass: exact match
+	for _, file := range t.Files() {
+		if file.DisplayPath() == filePath {
+			foundFile = file
+			break
+		}
+	}
+
+	// Second pass: fuzzy match (match by filename only)
+	if foundFile == nil {
+		targetBase := filepath.Base(filePath)
+		for _, file := range t.Files() {
+			if filepath.Base(file.DisplayPath()) == targetBase {
+				foundFile = file
+				break
+			}
+		}
+	}
+
+	if foundFile == nil {
+		return nil, nil, fmt.Errorf("file not found in torrent: %s", filePath)
+	}
+
+	// Prioritize this file for download
+	foundFile.SetPriority(torrent.PiecePriorityNow)
+
+	// Create reader
+	reader := foundFile.NewReader()
+	
+	// Create file info
+	fileInfo := &FileInfo{
+		Path:         foundFile.DisplayPath(),
+		Size:         foundFile.Length(),
+		IsStreamable: isStreamableFile(foundFile.DisplayPath()),
+	}
+
+	return reader, fileInfo, nil
 }
 
 // Close closes the torrent client
