@@ -2,8 +2,12 @@
 .claude/
 .history
 
-# Env
+# Env files (keep examples)
 .env
+.local.env
+.docker.env
+!.local.env.example
+!.docker.env.example
 
 # Project
 .logs/
@@ -13,7 +17,6 @@ configs/config.local.yml
 configs/config.prod.yml
 /download
 magnet
-.env
 
 # IDE
 .vscode/

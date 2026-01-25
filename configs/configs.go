@@ -157,10 +157,14 @@ var (
 
 // New initializes configuration
 // - ENV=prod uses production configuration
+// - Sensitive configs are loaded from environment variables
 func New() error {
 	v = viper.New()
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Bind environment variables for sensitive/environment-specific configs
+	bindEnvVariables()
 
 	env := os.Getenv("ENV")
 	var configPath string
@@ -184,9 +188,115 @@ func New() error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// Override sensitive configs from environment variables
+	overrideFromEnv(&config)
+
 	instance = &config
 	go monitorConfigChanges()
 	return nil
+}
+
+// bindEnvVariables binds environment variable names to viper keys
+func bindEnvVariables() {
+	// Database bindings
+	_ = v.BindEnv("DATABASE.DB_DIALECT", "DB_DIALECT")
+	_ = v.BindEnv("DATABASE.DB_HOST", "DB_HOST")
+	_ = v.BindEnv("DATABASE.DB_PORT", "DB_PORT")
+	_ = v.BindEnv("DATABASE.DB_USER", "DB_USER")
+	_ = v.BindEnv("DATABASE.DB_PSW", "DB_PASSWORD")
+	_ = v.BindEnv("DATABASE.DB_NAME", "DB_NAME")
+	_ = v.BindEnv("DATABASE.DB_PATH", "DB_PATH")
+
+	// Redis bindings
+	_ = v.BindEnv("REDIS.REDIS_HOST", "REDIS_HOST")
+	_ = v.BindEnv("REDIS.REDIS_PORT", "REDIS_PORT")
+	_ = v.BindEnv("REDIS.REDIS_PSW", "REDIS_PASSWORD")
+	_ = v.BindEnv("REDIS.REDIS_DB", "REDIS_DB")
+
+	// App bindings
+	_ = v.BindEnv("APP.APP_HOST", "APP_HOST")
+	_ = v.BindEnv("APP.APP_PORT", "APP_PORT")
+
+	// JWT bindings
+	_ = v.BindEnv("APP.JWT.SECRET", "JWT_SECRET")
+
+	// Email bindings
+	_ = v.BindEnv("APP.EMAIL.FROM_EMAIL", "FROM_EMAIL")
+	_ = v.BindEnv("APP.EMAIL.EMAIL_SMTP", "EMAIL_SMTP")
+
+	// Admin user bindings
+	_ = v.BindEnv("APP.USER.SUPER_ADMIN_EMAIL", "SUPER_ADMIN_EMAIL")
+	_ = v.BindEnv("APP.USER.SUPER_ADMIN_PASSWORD", "SUPER_ADMIN_PASSWORD")
+}
+
+// overrideFromEnv overrides config values from environment variables
+// This is a fallback for cases where viper binding doesn't work as expected
+func overrideFromEnv(config *Config) {
+	// Database overrides
+	if val := os.Getenv("DB_DIALECT"); val != "" {
+		config.DBConfig.DBDialect = val
+	}
+	if val := os.Getenv("DB_HOST"); val != "" {
+		config.DBConfig.DBHost = val
+	}
+	if val := os.Getenv("DB_PORT"); val != "" {
+		config.DBConfig.DBPort = val
+	}
+	if val := os.Getenv("DB_USER"); val != "" {
+		config.DBConfig.DBUser = val
+	}
+	if val := os.Getenv("DB_PASSWORD"); val != "" {
+		config.DBConfig.DBPassword = val
+	}
+	if val := os.Getenv("DB_NAME"); val != "" {
+		config.DBConfig.DBName = val
+	}
+	if val := os.Getenv("DB_PATH"); val != "" {
+		config.DBConfig.DBPath = val
+	}
+
+	// Redis overrides
+	if val := os.Getenv("REDIS_HOST"); val != "" {
+		config.RedisConfig.RedisHost = val
+	}
+	if val := os.Getenv("REDIS_PORT"); val != "" {
+		config.RedisConfig.RedisPort = val
+	}
+	if val := os.Getenv("REDIS_PASSWORD"); val != "" {
+		config.RedisConfig.RedisPassword = val
+	}
+	if val := os.Getenv("REDIS_DB"); val != "" {
+		config.RedisConfig.RedisDB = val
+	}
+
+	// App overrides
+	if val := os.Getenv("APP_HOST"); val != "" {
+		config.AppConfig.AppHost = val
+	}
+	if val := os.Getenv("APP_PORT"); val != "" {
+		config.AppConfig.AppPort = val
+	}
+
+	// JWT overrides
+	if val := os.Getenv("JWT_SECRET"); val != "" {
+		config.AppConfig.JWT.Secret = val
+	}
+
+	// Email overrides
+	if val := os.Getenv("FROM_EMAIL"); val != "" {
+		config.AppConfig.Email.FromEmail = val
+	}
+	if val := os.Getenv("EMAIL_SMTP"); val != "" {
+		config.AppConfig.Email.EmailSmtp = val
+	}
+
+	// Admin user overrides
+	if val := os.Getenv("SUPER_ADMIN_EMAIL"); val != "" {
+		config.AppConfig.User.SuperAdminEmail = val
+	}
+	if val := os.Getenv("SUPER_ADMIN_PASSWORD"); val != "" {
+		config.AppConfig.User.SuperAdminPassword = val
+	}
 }
 
 // GetConfig gets configuration

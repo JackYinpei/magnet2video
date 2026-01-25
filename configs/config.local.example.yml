@@ -1,8 +1,10 @@
-# 应用相关
+# ===========================================
+# 应用配置 (YAML - 支持热重载)
+# 敏感配置请在 .env 文件中设置
+# ===========================================
+
 APP:
   APP_NAME: "gin-scaffold"
-  APP_HOST: "127.0.0.1" # 如果使用 docker，则改为"0.0.0.0"
-  APP_PORT: "8080"
   # CORS 跨域相关
   CORS:
     ALLOW_ORIGINS: ["*"] # 允许的源，生产环境应指定具体域名
@@ -11,39 +13,27 @@ APP:
     EXPOSE_HEADERS: ["Content-Length", "Authorization"] # 暴露的响应头
     ALLOW_CREDENTIALS: true # 是否允许携带凭证
     MAX_AGE: 12 # 预检请求缓存时间（小时）
-  # 邮箱相关
+  # 邮箱相关 (敏感信息在 .env 中配置)
   EMAIL:
     EMAIL_TYPE: "qq" # 支持的邮箱类型: qq, gmail, outlook
-    FROM_EMAIL: "" # 发件人邮箱
-    EMAIL_SMTP: "" # SMTP 授权码
-  # JWT 认证相关
+  # JWT 认证相关 (SECRET 在 .env 中配置)
   JWT:
-    SECRET: "gin-scaffold-jwt-secret-key" # JWT 签名密钥
     EXPIRE_TIME: 2 # Token 有效期（小时）
     REFRESH_EXPIRE: 48 # 刷新Token有效期（小时）
-  # 用户角色相关
+  # 用户角色相关 (敏感信息在 .env 中配置)
   USER:
-    # 管理员账户配置
-    SUPER_ADMIN_EMAIL: "" # 管理员邮箱
-    SUPER_ADMIN_PASSWORD: "123456" # 管理员密码
     SUPER_ADMIN_NICKNAME: "超级管理员" # 管理员昵称
 
-# 数据库相关
+# ===========================================
+# 数据库相关 (连接信息在 .env 中配置)
+# ===========================================
 DATABASE:
-  DB_DIALECT: "postgres" # 数据库类型, 可选值: postgres, mysql, sqlite
-  DB_NAME: "gin-scaffold_db"
-  DB_HOST: "127.0.0.1" # Docker 服务名
-  DB_PORT: "5432"
-  DB_USER: "root"
-  DB_PSW: "123456"
   DB_PATH: "./database" # SQLite 数据库文件路径
 
-# Redis 相关
+# ===========================================
+# Redis 相关 (连接信息在 .env 中配置)
+# ===========================================
 REDIS:
-  REDIS_HOST: "127.0.0.1" # 如果使用 docker，则改为"redis"
-  REDIS_PORT: "6379"
-  REDIS_PSW: ""
-  REDIS_DB: "0"
   # 连接池配置（重启时生效）
   POOL_SIZE: 10        # 最大连接池大小
   MIN_IDLE_CONNS: 5    # 最小空闲连接数
@@ -51,7 +41,9 @@ REDIS:
   READ_TIMEOUT: 1      # 读取超时（秒）
   WRITE_TIMEOUT: 2     # 写入超时（秒）
 
+# ===========================================
 # 日志相关
+# ===========================================
 LOG:
   LOG_FILE_PATH: ".logs/"
   LOG_FILE_NAME: "app.log"
@@ -60,12 +52,16 @@ LOG:
   LOG_ROTATION_TIME: "24"
   LOG_LEVEL: "INFO"
 
+# ===========================================
 # Kafka 消息队列相关
+# ===========================================
 KAFKA:
   BROKERS: ["localhost:9092"] # Kafka 集群地址
   CONSUMER_GROUP: "trading-robot-dev" # 消费者组名称
 
-# AI 服务相关
+# ===========================================
+# AI 服务相关 (API Keys 在 .env 中配置)
+# ===========================================
 AI:
   PROMPT:
     DIR: "./configs/prompts" # 模板文件目录
