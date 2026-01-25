@@ -6,39 +6,48 @@ package routes
 import (
 	"github.com/gin-gonic/gin"
 
+	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
 	"github.com/Done-0/gin-scaffold/pkg/wire"
 )
 
 // RegisterTorrentRoutes registers torrent module routes
 func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
-	// V1 routes
-	torrent := v1.Group("/torrent")
+	// Public routes (no auth required) - for browsing public resources
+	publicTorrent := v1.Group("/torrent")
+	{
+		// List all public torrents (anyone can browse)
+		publicTorrent.GET("/public", container.TorrentController.ListPublicTorrents)
+
+		// Get torrent detail (public access for shared torrents)
+		publicTorrent.GET("/detail/:info_hash", container.TorrentController.GetTorrentDetail)
+
+		// Serve downloaded file with streaming support (public access for shared files)
+		publicTorrent.GET("/file/:info_hash/*file_path", container.TorrentController.ServeFile)
+	}
+
+	// Protected routes (auth required) - for managing own resources
+	protectedTorrent := v1.Group("/torrent")
+	protectedTorrent.Use(auth.JWTMiddleware())
 	{
 		// Parse magnet URI and get file list
-		torrent.POST("/parse", container.TorrentController.ParseMagnet)
+		protectedTorrent.POST("/parse", container.TorrentController.ParseMagnet)
 
 		// Start download with selected files
-		torrent.POST("/download", container.TorrentController.StartDownload)
+		protectedTorrent.POST("/download", container.TorrentController.StartDownload)
 
 		// Get download progress
-		torrent.GET("/progress/:info_hash", container.TorrentController.GetProgress)
+		protectedTorrent.GET("/progress/:info_hash", container.TorrentController.GetProgress)
 
 		// Pause download
-		torrent.POST("/pause", container.TorrentController.PauseDownload)
+		protectedTorrent.POST("/pause", container.TorrentController.PauseDownload)
 
 		// Resume download
-		torrent.POST("/resume", container.TorrentController.ResumeDownload)
+		protectedTorrent.POST("/resume", container.TorrentController.ResumeDownload)
 
 		// Remove torrent
-		torrent.POST("/remove", container.TorrentController.RemoveTorrent)
+		protectedTorrent.POST("/remove", container.TorrentController.RemoveTorrent)
 
-		// List all torrents
-		torrent.GET("/list", container.TorrentController.ListTorrents)
-
-		// Get torrent detail
-		torrent.GET("/detail/:info_hash", container.TorrentController.GetTorrentDetail)
-
-		// Serve downloaded file with streaming support
-		torrent.GET("/file/:info_hash/*file_path", container.TorrentController.ServeFile)
+		// List user's own torrents
+		protectedTorrent.GET("/list", container.TorrentController.ListTorrents)
 	}
 }

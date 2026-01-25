@@ -172,10 +172,22 @@ func (tc *TorrentController) RemoveTorrent(c *gin.Context) {
 	c.JSON(http.StatusOK, vo.Success(c, response))
 }
 
-// ListTorrents handles listing all torrents
+// ListTorrents handles listing user's torrents
 // @Router /api/v1/torrent/list [get]
 func (tc *TorrentController) ListTorrents(c *gin.Context) {
 	response, err := tc.torrentService.ListTorrents(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer, errorx.KV("msg", err.Error()))))
+		return
+	}
+
+	c.JSON(http.StatusOK, vo.Success(c, response))
+}
+
+// ListPublicTorrents handles listing all public torrents
+// @Router /api/v1/torrent/public [get]
+func (tc *TorrentController) ListPublicTorrents(c *gin.Context) {
+	response, err := tc.torrentService.ListPublicTorrents(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer, errorx.KV("msg", err.Error()))))
 		return

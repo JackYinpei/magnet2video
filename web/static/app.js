@@ -1,21 +1,42 @@
 // API 基础配置
-const API_BASE = '/api/v1/torrent';
+const API_BASE = '/api/v1';
+const TORRENT_API = '/api/v1/torrent';
+const AUTH_API = '/api/v1/auth';
+const USER_API = '/api/v1/user';
 
 // 状态
 let currentInfoHash = null;
 let parsedTorrent = null;
 let progressInterval = null;
+let currentUser = null;
 
 // DOM 元素
 const elements = {
     // 页面
+    pageLogin: document.getElementById('page-login'),
+    pageRegister: document.getElementById('page-register'),
     pageLibrary: document.getElementById('page-library'),
+    pagePublic: document.getElementById('page-public'),
     pageAdd: document.getElementById('page-add'),
     pageDownloads: document.getElementById('page-downloads'),
     pagePlayer: document.getElementById('page-player'),
+    pageProfile: document.getElementById('page-profile'),
 
     // 导航
     navLinks: document.querySelectorAll('.nav-link'),
+    navUser: document.getElementById('nav-user'),
+
+    // 认证表单
+    loginForm: document.getElementById('login-form'),
+    registerForm: document.getElementById('register-form'),
+    loginEmail: document.getElementById('login-email'),
+    loginPassword: document.getElementById('login-password'),
+    registerEmail: document.getElementById('register-email'),
+    registerNickname: document.getElementById('register-nickname'),
+    registerPassword: document.getElementById('register-password'),
+    registerConfirm: document.getElementById('register-confirm'),
+    gotoRegister: document.getElementById('goto-register'),
+    gotoLogin: document.getElementById('goto-login'),
 
     // 添加页面
     magnetInput: document.getElementById('magnet-input'),
@@ -33,6 +54,7 @@ const elements = {
 
     // 媒体库
     libraryGrid: document.getElementById('library-grid'),
+    publicGrid: document.getElementById('public-grid'),
 
     // 下载
     downloadsList: document.getElementById('downloads-list'),
@@ -42,13 +64,21 @@ const elements = {
     playerTitle: document.getElementById('player-title'),
     videoPlayer: document.getElementById('video-player'),
     playerFiles: document.getElementById('player-files'),
+    playerShare: document.getElementById('player-share'),
+
+    // 个人资料
+    profileEmail: document.getElementById('profile-email'),
+    profileNickname: document.getElementById('profile-nickname'),
+    profileAvatar: document.getElementById('profile-avatar'),
+    logoutBtn: document.getElementById('logout-btn'),
 
     // 通用
     toast: document.getElementById('toast'),
     loading: document.getElementById('loading')
 };
 
-// 工具函数
+// ============ 工具函数 ============
+
 function showLoading() {
     elements.loading.classList.remove('hidden');
 }
@@ -90,17 +120,48 @@ function isVideoFile(path) {
     return ['mp4', 'm4v', 'webm', 'mov', 'mkv', 'avi', 'wmv', 'flv'].includes(ext);
 }
 
-// API 请求
-async function apiRequest(endpoint, options = {}) {
+// ============ Token 管理 ============
+
+function getToken() {
+    return localStorage.getItem('auth_token');
+}
+
+function setToken(token) {
+    localStorage.setItem('auth_token', token);
+}
+
+function removeToken() {
+    localStorage.removeItem('auth_token');
+}
+
+function getAuthHeaders() {
+    const token = getToken();
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+}
+
+// ============ API 请求 ============
+
+async function apiRequest(url, options = {}) {
     try {
-        const response = await fetch(`${API_BASE}${endpoint}`, {
+        const response = await fetch(url, {
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders(),
                 ...options.headers
             },
             ...options
         });
         const data = await response.json();
+
+        // 401 未授权，清除token并跳转登录
+        if (response.status === 401) {
+            removeToken();
+            currentUser = null;
+            updateNavUser();
+            navigateTo('login');
+            throw new Error('请先登录');
+        }
+
         if (data.error) {
             throw new Error(data.error.message || '请求失败');
         }
@@ -110,8 +171,95 @@ async function apiRequest(endpoint, options = {}) {
     }
 }
 
-// 页面导航
+// ============ 认证功能 ============
+
+async function register(email, password, nickname) {
+    showLoading();
+    try {
+        const data = await apiRequest(`${AUTH_API}/register`, {
+            method: 'POST',
+            body: JSON.stringify({ email, password, nickname })
+        });
+        setToken(data.token);
+        currentUser = data.user;
+        updateNavUser();
+        showToast('注册成功！', 'success');
+        navigateTo('library');
+    } catch (error) {
+        showToast(error.message || '注册失败', 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+async function login(email, password) {
+    showLoading();
+    try {
+        const data = await apiRequest(`${AUTH_API}/login`, {
+            method: 'POST',
+            body: JSON.stringify({ email, password })
+        });
+        setToken(data.token);
+        currentUser = data.user;
+        updateNavUser();
+        showToast('登录成功！', 'success');
+        navigateTo('library');
+    } catch (error) {
+        showToast(error.message || '登录失败', 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+function logout() {
+    removeToken();
+    currentUser = null;
+    updateNavUser();
+    showToast('已退出登录', 'success');
+    navigateTo('public');
+}
+
+async function loadUserProfile() {
+    const token = getToken();
+    if (!token) return;
+
+    try {
+        const data = await apiRequest(`${USER_API}/profile`);
+        currentUser = data.user;
+        updateNavUser();
+    } catch (error) {
+        console.error('加载用户信息失败:', error);
+        removeToken();
+    }
+}
+
+function updateNavUser() {
+    if (currentUser) {
+        elements.navUser.innerHTML = `
+            <div class="user-info" onclick="navigateTo('profile')">
+                <div class="user-avatar">${currentUser.nickname?.charAt(0).toUpperCase() || '👤'}</div>
+                <span class="user-name">${currentUser.nickname}</span>
+            </div>
+        `;
+    } else {
+        elements.navUser.innerHTML = `
+            <button class="login-btn" onclick="navigateTo('login')">登录</button>
+        `;
+    }
+}
+
+// ============ 页面导航 ============
+
 function navigateTo(pageName) {
+    // 需要登录的页面
+    const protectedPages = ['library', 'add', 'downloads', 'profile'];
+
+    if (protectedPages.includes(pageName) && !currentUser) {
+        showToast('请先登录', 'error');
+        navigateTo('login');
+        return;
+    }
+
     // 隐藏所有页面
     document.querySelectorAll('.page').forEach(page => {
         page.classList.remove('active');
@@ -132,18 +280,96 @@ function navigateTo(pageName) {
     }
 
     // 页面特定逻辑
-    if (pageName === 'library') {
-        loadLibrary();
-    } else if (pageName === 'downloads') {
-        loadDownloads();
-        startProgressPolling();
-    } else {
-        stopProgressPolling();
+    switch (pageName) {
+        case 'library':
+            loadLibrary();
+            break;
+        case 'public':
+            loadPublicLibrary();
+            break;
+        case 'downloads':
+            loadDownloads();
+            startProgressPolling();
+            break;
+        case 'profile':
+            loadProfile();
+            break;
+        default:
+            stopProgressPolling();
     }
 }
 
-// 解析磁力链接
+// ============ 媒体库功能 ============
+
+async function loadLibrary() {
+    if (!currentUser) return;
+
+    try {
+        const data = await apiRequest(`${TORRENT_API}/list`);
+        renderLibrary(data.torrents || [], elements.libraryGrid, true);
+    } catch (error) {
+        console.error('加载媒体库失败:', error);
+    }
+}
+
+async function loadPublicLibrary() {
+    try {
+        const data = await apiRequest(`${TORRENT_API}/public`);
+        renderLibrary(data.torrents || [], elements.publicGrid, false);
+    } catch (error) {
+        console.error('加载公共资源失败:', error);
+    }
+}
+
+function renderLibrary(torrents, container, isOwner) {
+    if (torrents.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <p>${isOwner ? '暂无媒体，点击"添加"开始下载' : '暂无公开资源'}</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = torrents.map(torrent => `
+        <div class="poster-card" data-infohash="${torrent.info_hash}">
+            <div class="poster-image">
+                ${torrent.poster_path
+            ? `<img src="${torrent.poster_path}" alt="${torrent.name}">`
+            : '🎬'}
+            </div>
+            <div class="poster-info">
+                <div class="poster-title" title="${torrent.name}">${torrent.name}</div>
+                <div class="poster-meta">
+                    ${formatSize(torrent.total_size)} · ${getStatusText(torrent.status)}
+                    ${torrent.is_public ? '<span class="poster-public-badge">公开</span>' : ''}
+                </div>
+                ${torrent.status !== 2 ? `
+                    <div class="poster-progress">
+                        <div class="poster-progress-bar" style="width: ${torrent.progress}%"></div>
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `).join('');
+
+    // 绑定点击事件
+    container.querySelectorAll('.poster-card').forEach(card => {
+        card.addEventListener('click', () => {
+            openPlayer(card.dataset.infohash, isOwner);
+        });
+    });
+}
+
+// ============ 下载功能 ============
+
 async function parseMagnet() {
+    if (!currentUser) {
+        showToast('请先登录', 'error');
+        navigateTo('login');
+        return;
+    }
+
     const magnetUri = elements.magnetInput.value.trim();
     if (!magnetUri) {
         showToast('请输入磁力链接', 'error');
@@ -163,7 +389,7 @@ async function parseMagnet() {
     showLoading();
 
     try {
-        const data = await apiRequest('/parse', {
+        const data = await apiRequest(`${TORRENT_API}/parse`, {
             method: 'POST',
             body: JSON.stringify({
                 magnet_uri: magnetUri,
@@ -190,7 +416,6 @@ async function parseMagnet() {
     }
 }
 
-// 渲染文件列表
 function renderFileList(files) {
     elements.fileList.innerHTML = files.map((file, index) => `
         <div class="file-item">
@@ -206,13 +431,11 @@ function renderFileList(files) {
     `).join('');
 }
 
-// 获取选中的文件索引
 function getSelectedFiles() {
     const checkboxes = elements.fileList.querySelectorAll('input[type="checkbox"]:checked');
     return Array.from(checkboxes).map(cb => parseInt(cb.dataset.index));
 }
 
-// 选择操作
 function selectAllFiles() {
     elements.fileList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.checked = true;
@@ -232,7 +455,6 @@ function selectVideoFiles() {
     });
 }
 
-// 开始下载
 async function startDownload() {
     if (!currentInfoHash) {
         showToast('请先解析磁力链接', 'error');
@@ -248,7 +470,7 @@ async function startDownload() {
     showLoading();
 
     try {
-        await apiRequest('/download', {
+        await apiRequest(`${TORRENT_API}/download`, {
             method: 'POST',
             body: JSON.stringify({
                 info_hash: currentInfoHash,
@@ -267,7 +489,6 @@ async function startDownload() {
     }
 }
 
-// 重置添加表单
 function resetAddForm() {
     elements.magnetInput.value = '';
     elements.trackerInput.value = '';
@@ -277,69 +498,20 @@ function resetAddForm() {
     currentInfoHash = null;
 }
 
-// 加载媒体库
-async function loadLibrary() {
-    try {
-        const data = await apiRequest('/list');
-        renderLibrary(data.torrents || []);
-    } catch (error) {
-        console.error('加载媒体库失败:', error);
-    }
-}
+// ============ 下载列表 ============
 
-// 渲染媒体库
-function renderLibrary(torrents) {
-    if (torrents.length === 0) {
-        elements.libraryGrid.innerHTML = `
-            <div class="empty-state">
-                <p>暂无媒体，点击"添加"开始下载</p>
-            </div>
-        `;
-        return;
-    }
-
-    elements.libraryGrid.innerHTML = torrents.map(torrent => `
-        <div class="poster-card" data-infohash="${torrent.info_hash}">
-            <div class="poster-image">
-                ${torrent.poster_path
-            ? `<img src="${torrent.poster_path}" alt="${torrent.name}">`
-            : '🎬'}
-            </div>
-            <div class="poster-info">
-                <div class="poster-title" title="${torrent.name}">${torrent.name}</div>
-                <div class="poster-meta">${formatSize(torrent.total_size)} · ${getStatusText(torrent.status)}</div>
-                ${torrent.status !== 2 ? `
-                    <div class="poster-progress">
-                        <div class="poster-progress-bar" style="width: ${torrent.progress}%"></div>
-                    </div>
-                ` : ''}
-            </div>
-        </div>
-    `).join('');
-
-    // 绑定点击事件
-    elements.libraryGrid.querySelectorAll('.poster-card').forEach(card => {
-        card.addEventListener('click', () => {
-            openPlayer(card.dataset.infohash);
-        });
-    });
-}
-
-// 加载下载列表
 async function loadDownloads() {
+    if (!currentUser) return;
+
     try {
-        const data = await apiRequest('/list');
+        const data = await apiRequest(`${TORRENT_API}/list`);
         renderDownloads(data.torrents || []);
     } catch (error) {
         console.error('加载下载列表失败:', error);
     }
 }
 
-// 渲染下载列表
 function renderDownloads(torrents) {
-    // 过滤出非完成的任务
-    const activeTorrents = torrents.filter(t => t.status !== 2);
-
     if (torrents.length === 0) {
         elements.downloadsList.innerHTML = `
             <div class="empty-state">
@@ -359,6 +531,10 @@ function renderDownloads(torrents) {
                     ` : torrent.status === 4 ? `
                         <button class="btn btn-sm resume-btn" data-infohash="${torrent.info_hash}">继续</button>
                     ` : ''}
+                    <button class="btn btn-sm ${torrent.is_public ? 'btn-success' : ''}" 
+                            onclick="togglePublic('${torrent.info_hash}', ${!torrent.is_public})">
+                        ${torrent.is_public ? '✓ 公开' : '设为公开'}
+                    </button>
                     <button class="btn btn-sm remove-btn" data-infohash="${torrent.info_hash}">删除</button>
                 </div>
             </div>
@@ -398,10 +574,9 @@ function renderDownloads(torrents) {
     });
 }
 
-// 暂停下载
 async function pauseDownload(infoHash) {
     try {
-        await apiRequest('/pause', {
+        await apiRequest(`${TORRENT_API}/pause`, {
             method: 'POST',
             body: JSON.stringify({ info_hash: infoHash })
         });
@@ -412,14 +587,13 @@ async function pauseDownload(infoHash) {
     }
 }
 
-// 继续下载
 async function resumeDownload(infoHash) {
     try {
-        await apiRequest('/resume', {
+        await apiRequest(`${TORRENT_API}/resume`, {
             method: 'POST',
             body: JSON.stringify({
                 info_hash: infoHash,
-                selected_files: [] // 恢复所有已选文件
+                selected_files: []
             })
         });
         showToast('已继续', 'success');
@@ -429,14 +603,13 @@ async function resumeDownload(infoHash) {
     }
 }
 
-// 删除种子
 async function removeTorrent(infoHash) {
     if (!confirm('确定要删除这个任务吗？')) {
         return;
     }
 
     try {
-        await apiRequest('/remove', {
+        await apiRequest(`${TORRENT_API}/remove`, {
             method: 'POST',
             body: JSON.stringify({
                 info_hash: infoHash,
@@ -451,7 +624,22 @@ async function removeTorrent(infoHash) {
     }
 }
 
-// 开始进度轮询
+async function togglePublic(infoHash, isPublic) {
+    try {
+        await apiRequest(`${USER_API}/torrent/public`, {
+            method: 'POST',
+            body: JSON.stringify({
+                info_hash: infoHash,
+                is_public: isPublic
+            })
+        });
+        showToast(isPublic ? '已设为公开' : '已设为私有', 'success');
+        loadDownloads();
+    } catch (error) {
+        showToast(error.message || '设置失败', 'error');
+    }
+}
+
 function startProgressPolling() {
     stopProgressPolling();
     progressInterval = setInterval(() => {
@@ -459,7 +647,6 @@ function startProgressPolling() {
     }, 3000);
 }
 
-// 停止进度轮询
 function stopProgressPolling() {
     if (progressInterval) {
         clearInterval(progressInterval);
@@ -467,15 +654,31 @@ function stopProgressPolling() {
     }
 }
 
-// 打开播放器
-async function openPlayer(infoHash) {
+// ============ 播放器 ============
+
+let currentTorrentIsOwner = false;
+
+async function openPlayer(infoHash, isOwner = false) {
     showLoading();
+    currentTorrentIsOwner = isOwner;
 
     try {
-        const data = await apiRequest(`/detail/${infoHash}`);
+        const data = await apiRequest(`${TORRENT_API}/detail/${infoHash}`);
 
         currentInfoHash = infoHash;
         elements.playerTitle.textContent = data.name;
+
+        // 渲染分享按钮（仅对自己的资源显示）
+        if (isOwner) {
+            elements.playerShare.innerHTML = `
+                <div class="share-toggle ${data.is_public ? 'public' : 'private'}" 
+                     onclick="togglePublicFromPlayer('${infoHash}', ${!data.is_public})">
+                    ${data.is_public ? '✓ 已公开分享' : '🔒 设为公开'}
+                </div>
+            `;
+        } else {
+            elements.playerShare.innerHTML = '';
+        }
 
         // 渲染文件列表
         const videoFiles = data.files.filter(f => isVideoFile(f.path));
@@ -532,16 +735,37 @@ async function openPlayer(infoHash) {
     }
 }
 
-// 播放文件
+async function togglePublicFromPlayer(infoHash, isPublic) {
+    await togglePublic(infoHash, isPublic);
+    // 刷新分享按钮状态
+    elements.playerShare.innerHTML = `
+        <div class="share-toggle ${isPublic ? 'public' : 'private'}" 
+             onclick="togglePublicFromPlayer('${infoHash}', ${!isPublic})">
+            ${isPublic ? '✓ 已公开分享' : '🔒 设为公开'}
+        </div>
+    `;
+}
+
 function playFile(filePath) {
-    const videoUrl = `${API_BASE}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+    const videoUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
     elements.videoPlayer.src = videoUrl;
     elements.videoPlayer.play().catch(e => {
         console.log('Auto-play prevented:', e);
     });
 }
 
-// 初始化事件监听
+// ============ 个人资料 ============
+
+function loadProfile() {
+    if (!currentUser) return;
+
+    elements.profileEmail.textContent = currentUser.email;
+    elements.profileNickname.textContent = currentUser.nickname;
+    elements.profileAvatar.textContent = currentUser.nickname?.charAt(0).toUpperCase() || '👤';
+}
+
+// ============ 事件监听初始化 ============
+
 function initEventListeners() {
     // 导航
     elements.navLinks.forEach(link => {
@@ -549,6 +773,43 @@ function initEventListeners() {
             e.preventDefault();
             navigateTo(link.dataset.page);
         });
+    });
+
+    // 登录表单
+    elements.loginForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        login(elements.loginEmail.value, elements.loginPassword.value);
+    });
+
+    // 注册表单
+    elements.registerForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const password = elements.registerPassword.value;
+        const confirm = elements.registerConfirm.value;
+
+        if (password !== confirm) {
+            showToast('两次输入的密码不一致', 'error');
+            return;
+        }
+
+        register(
+            elements.registerEmail.value,
+            password,
+            elements.registerNickname.value
+        );
+    });
+
+    // 切换登录/注册
+    elements.gotoRegister.addEventListener('click', (e) => {
+        e.preventDefault();
+        document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+        elements.pageRegister.classList.add('active');
+    });
+
+    elements.gotoLogin.addEventListener('click', (e) => {
+        e.preventDefault();
+        document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+        elements.pageLogin.classList.add('active');
     });
 
     // 解析按钮
@@ -567,8 +828,15 @@ function initEventListeners() {
     elements.backBtn.addEventListener('click', () => {
         elements.videoPlayer.pause();
         elements.videoPlayer.src = '';
-        navigateTo('library');
+        if (currentTorrentIsOwner) {
+            navigateTo('library');
+        } else {
+            navigateTo('public');
+        }
     });
+
+    // 退出登录
+    elements.logoutBtn.addEventListener('click', logout);
 
     // 键盘快捷键
     document.addEventListener('keydown', (e) => {
@@ -580,11 +848,26 @@ function initEventListeners() {
     });
 }
 
-// 初始化
-function init() {
+// ============ 初始化 ============
+
+async function init() {
     initEventListeners();
-    loadLibrary();
+
+    // 尝试加载用户信息
+    await loadUserProfile();
+
+    // 根据登录状态显示不同页面
+    if (currentUser) {
+        navigateTo('library');
+    } else {
+        navigateTo('public');
+    }
 }
 
 // 启动应用
 document.addEventListener('DOMContentLoaded', init);
+
+// 暴露全局函数供onclick使用
+window.navigateTo = navigateTo;
+window.togglePublic = togglePublic;
+window.togglePublicFromPlayer = togglePublicFromPlayer;

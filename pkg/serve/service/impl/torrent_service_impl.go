@@ -13,6 +13,7 @@ import (
 
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/logger"
+	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
 	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
@@ -22,9 +23,9 @@ import (
 
 // TorrentServiceImpl torrent service implementation
 type TorrentServiceImpl struct {
-	loggerManager   logger.LoggerManager
-	dbManager       db.DatabaseManager
-	torrentManager  torrent.TorrentManager
+	loggerManager  logger.LoggerManager
+	dbManager      db.DatabaseManager
+	torrentManager torrent.TorrentManager
 }
 
 // NewTorrentService creates torrent service implementation
@@ -38,10 +39,10 @@ func NewTorrentService(
 		dbManager:      dbManager,
 		torrentManager: torrentManager,
 	}
-	
+
 	// Restore torrents in background
 	go instance.restoreTorrents()
-	
+
 	return instance
 }
 
@@ -106,6 +107,9 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 		// We would need to get file info from the client here
 		// For now, we'll update this when we have more info
 
+		// Get current user ID from context
+		userID := auth.GetUserID(c)
+
 		newTorrent := &torrentModel.Torrent{
 			InfoHash:     req.InfoHash,
 			Name:         progress.Name,
@@ -115,7 +119,8 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 			Status:       torrentModel.StatusDownloading,
 			Progress:     0,
 			Trackers:     torrentModel.StringSlice(req.Trackers),
-			CreatorID:    0, // No user system yet
+			CreatorID:    userID,
+			IsPublic:     false, // Default to private
 		}
 
 		if err := ts.dbManager.DB().Create(newTorrent).Error; err != nil {
@@ -123,9 +128,24 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 			return nil, err
 		}
 	} else if result.Error == nil {
-		// Update existing record
-		existingTorrent.Status = torrentModel.StatusDownloading
-		if err := ts.dbManager.DB().Save(&existingTorrent).Error; err != nil {
+		// Update existing record - may be a soft-deleted record being re-added
+		// Get current user ID from context
+		userID := auth.GetUserID(c)
+
+		// Update the record: reset deleted flag, update status and user
+		updates := map[string]any{
+			"status":     torrentModel.StatusDownloading,
+			"deleted":    false,
+			"name":       progress.Name,
+			"total_size": progress.TotalSize,
+		}
+
+		// Update creator_id only if it was 0 or if this user is adding it
+		if existingTorrent.CreatorID == 0 {
+			updates["creator_id"] = userID
+		}
+
+		if err := ts.dbManager.DB().Model(&existingTorrent).Updates(updates).Error; err != nil {
 			ts.loggerManager.Logger().Errorf("failed to update torrent record: %v", err)
 			return nil, err
 		}
@@ -158,12 +178,12 @@ func (ts *TorrentServiceImpl) GetProgress(c *gin.Context, req *dto.GetProgressRe
 	}
 
 	return &vo.DownloadProgressResponse{
-		InfoHash:       progress.InfoHash,
-		Name:           progress.Name,
-		TotalSize:      progress.TotalSize,
-		DownloadedSize: progress.DownloadedSize,
-		Progress:       progress.Progress,
-		Status:         progress.Status,
+		InfoHash:              progress.InfoHash,
+		Name:                  progress.Name,
+		TotalSize:             progress.TotalSize,
+		DownloadedSize:        progress.DownloadedSize,
+		Progress:              progress.Progress,
+		Status:                progress.Status,
 		Peers:                 progress.Peers,
 		Seeds:                 progress.Seeds,
 		DownloadSpeed:         progress.DownloadSpeed,
@@ -237,17 +257,61 @@ func (ts *TorrentServiceImpl) RemoveTorrent(c *gin.Context, req *dto.RemoveTorre
 	}, nil
 }
 
-// ListTorrents lists all torrents
+// ListTorrents lists torrents for the current user
+// If user is authenticated, only returns their torrents
+// If not authenticated, returns empty list
 func (ts *TorrentServiceImpl) ListTorrents(c *gin.Context) (*vo.TorrentListResponse, error) {
+	userID := auth.GetUserID(c)
+
 	var torrents []torrentModel.Torrent
 
-	if err := ts.dbManager.DB().Where("deleted = ?", false).
-		Order("created_at DESC").
-		Find(&torrents).Error; err != nil {
+	query := ts.dbManager.DB().Where("deleted = ?", false)
+
+	// If user is authenticated, filter by their user ID
+	if userID > 0 {
+		query = query.Where("creator_id = ?", userID)
+	} else {
+		// Not authenticated, return empty list
+		return &vo.TorrentListResponse{
+			Torrents: []vo.TorrentListItem{},
+			Total:    0,
+		}, nil
+	}
+
+	if err := query.Order("created_at DESC").Find(&torrents).Error; err != nil {
 		ts.loggerManager.Logger().Errorf("failed to list torrents: %v", err)
 		return nil, err
 	}
 
+	items := ts.torrentListToItems(torrents)
+
+	return &vo.TorrentListResponse{
+		Torrents: items,
+		Total:    len(items),
+	}, nil
+}
+
+// ListPublicTorrents lists all public torrents
+func (ts *TorrentServiceImpl) ListPublicTorrents(c *gin.Context) (*vo.TorrentListResponse, error) {
+	var torrents []torrentModel.Torrent
+
+	if err := ts.dbManager.DB().Where("deleted = ? AND is_public = ?", false, true).
+		Order("created_at DESC").
+		Find(&torrents).Error; err != nil {
+		ts.loggerManager.Logger().Errorf("failed to list public torrents: %v", err)
+		return nil, err
+	}
+
+	items := ts.torrentListToItems(torrents)
+
+	return &vo.TorrentListResponse{
+		Torrents: items,
+		Total:    len(items),
+	}, nil
+}
+
+// torrentListToItems converts a list of torrent models to list items with real-time stats
+func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent) []vo.TorrentListItem {
 	items := make([]vo.TorrentListItem, len(torrents))
 	for i, t := range torrents {
 		items[i] = vo.TorrentListItem{
@@ -258,6 +322,7 @@ func (ts *TorrentServiceImpl) ListTorrents(c *gin.Context) (*vo.TorrentListRespo
 			Status:     t.Status,
 			PosterPath: t.PosterPath,
 			CreatedAt:  t.CreatedAt,
+			IsPublic:   t.IsPublic,
 		}
 
 		// Mix in real-time stats if downloading or seeding
@@ -269,11 +334,7 @@ func (ts *TorrentServiceImpl) ListTorrents(c *gin.Context) (*vo.TorrentListRespo
 			}
 		}
 	}
-
-	return &vo.TorrentListResponse{
-		Torrents: items,
-		Total:    len(items),
-	}, nil
+	return items
 }
 
 // GetTorrentDetail gets detailed information about a torrent

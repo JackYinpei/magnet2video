@@ -302,16 +302,32 @@ func (c *Client) GetProgress(infoHash string) (*DownloadProgress, error) {
 		}, nil
 	}
 
-	bytesCompleted := t.BytesCompleted()
-	totalBytes := info.TotalLength()
+	// Calculate progress based on selected files only
+	var selectedTotalBytes int64 = 0
+	var selectedCompletedBytes int64 = 0
+
+	for _, file := range t.Files() {
+		// Check if file has download priority (not PiecePriorityNone)
+		// A file with priority None means it's not selected for download
+		if file.Priority() != torrent.PiecePriorityNone {
+			selectedTotalBytes += file.Length()
+			selectedCompletedBytes += file.BytesCompleted()
+		}
+	}
+
+	// Fallback to total if no files selected (shouldn't happen normally)
+	if selectedTotalBytes == 0 {
+		selectedTotalBytes = info.TotalLength()
+		selectedCompletedBytes = t.BytesCompleted()
+	}
 
 	progress := float64(0)
-	if totalBytes > 0 {
-		progress = float64(bytesCompleted) / float64(totalBytes) * 100
+	if selectedTotalBytes > 0 {
+		progress = float64(selectedCompletedBytes) / float64(selectedTotalBytes) * 100
 	}
 
 	status := "downloading"
-	if bytesCompleted >= totalBytes {
+	if selectedCompletedBytes >= selectedTotalBytes {
 		status = "completed"
 	} else if t.Seeding() {
 		status = "seeding"
@@ -324,48 +340,32 @@ func (c *Client) GetProgress(infoHash string) (*DownloadProgress, error) {
 	stat, ok := c.speedStats[infoHash]
 	if !ok {
 		c.speedStats[infoHash] = &speedStat{
-			LastBytes: bytesCompleted,
+			LastBytes: selectedCompletedBytes,
 			LastTime:  now,
 		}
 	} else {
 		duration := now.Sub(stat.LastTime)
 		if duration >= time.Second {
-			diff := bytesCompleted - stat.LastBytes
+			diff := selectedCompletedBytes - stat.LastBytes
 			// Handle potential restart or check weirdness
 			if diff < 0 {
 				diff = 0
 			}
 			speed = int64(float64(diff) / duration.Seconds())
-			
+
 			// Update stat
-			stat.LastBytes = bytesCompleted
+			stat.LastBytes = selectedCompletedBytes
 			stat.LastTime = now
-		} else {
-			// Estimate based on previous explicit calculation could be better,
-			// but for now 0 or skipping update is safer to avoid fluctuation
 		}
 	}
-	// Note: We need a better way to persist the calculated speed between calls if calls are frequent,
-	// currently if calls are < 1s, speed might show 0.
-	// But since frontend polls every 3s, this simplisitic logic effectively calculates avg speed over 3s.
 
 	stats := t.Stats()
-
-	// If calculating speed on demand is tricky with <1s intervals, we can just return the last calculated speed
-	// if time diff is small.
-	// Let's improve the logic: always return calculated speed, update it only if enough time passed.
-	
-	// Better logic:
-	if ok && now.Sub(stat.LastTime) < 500*time.Millisecond {
-		// Use previous calculation if queried too fast, but we don't store "Speed" in struct yet
-		// For simplicity, let's just accept that speed is calculated based on calls.
-	}
 
 	return &DownloadProgress{
 		InfoHash:       infoHash,
 		Name:           t.Name(),
-		TotalSize:      totalBytes,
-		DownloadedSize: bytesCompleted,
+		TotalSize:      selectedTotalBytes,
+		DownloadedSize: selectedCompletedBytes,
 		Progress:       progress,
 		Status:         status,
 		Peers:          stats.ActivePeers,

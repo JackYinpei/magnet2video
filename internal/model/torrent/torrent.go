@@ -44,16 +44,17 @@ func (tf TorrentFiles) Value() (driver.Value, error) {
 // Torrent represents a torrent download record
 type Torrent struct {
 	base.Base
-	InfoHash     string       `gorm:"type:varchar(64);unique;not null;index" json:"info_hash"`   // Torrent info hash
-	Name         string       `gorm:"type:varchar(512)" json:"name"`                             // Torrent name
-	TotalSize    int64        `gorm:"type:bigint;default:0" json:"total_size"`                   // Total size in bytes
-	Files        TorrentFiles `gorm:"type:json" json:"files"`                                    // Files in the torrent
-	PosterPath   string       `gorm:"type:varchar(512)" json:"poster_path"`                      // Poster file path or URL
-	DownloadPath string       `gorm:"type:varchar(512)" json:"download_path"`                    // Download directory path
-	Status       int          `gorm:"type:int;default:0" json:"status"`                          // Download status: 0=pending, 1=downloading, 2=completed, 3=failed, 4=paused
-	Progress     float64      `gorm:"type:decimal(5,2);default:0" json:"progress"`               // Download progress percentage
-	Trackers     StringSlice  `gorm:"type:json" json:"trackers"`                                 // Custom trackers
-	CreatorID    int64        `gorm:"type:bigint;default:0" json:"creator_id"`                   // Creator user ID (0 if no user system)
+	InfoHash     string       `gorm:"type:varchar(64);unique;not null;index" json:"info_hash"` // Torrent info hash
+	Name         string       `gorm:"type:varchar(512)" json:"name"`                           // Torrent name
+	TotalSize    int64        `gorm:"type:bigint;default:0" json:"total_size"`                 // Total size in bytes
+	Files        TorrentFiles `gorm:"type:json" json:"files"`                                  // Files in the torrent
+	PosterPath   string       `gorm:"type:varchar(512)" json:"poster_path"`                    // Poster file path or URL
+	DownloadPath string       `gorm:"type:varchar(512)" json:"download_path"`                  // Download directory path
+	Status       int          `gorm:"type:int;default:0" json:"status"`                        // Download status: 0=pending, 1=downloading, 2=completed, 3=failed, 4=paused
+	Progress     float64      `gorm:"type:decimal(5,2);default:0" json:"progress"`             // Download progress percentage
+	Trackers     StringSlice  `gorm:"type:json" json:"trackers"`                               // Custom trackers
+	CreatorID    int64        `gorm:"type:bigint;default:0;index" json:"creator_id"`           // Creator user ID (0 if no user system)
+	IsPublic     bool         `gorm:"type:tinyint(1);default:0" json:"is_public"`              // Whether the torrent is publicly shared
 }
 
 // StringSlice is a slice of strings that can be stored in database

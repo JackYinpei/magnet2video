@@ -39,12 +39,14 @@ var MapperProviders = wire.NewSet()
 var ServiceProviders = wire.NewSet(
 	impl.NewTestService,
 	impl.NewTorrentService,
+	impl.NewUserService,
 )
 
 // ControllerProviders provides controller layer dependencies
 var ControllerProviders = wire.NewSet(
 	controller.NewTestController,
 	controller.NewTorrentController,
+	controller.NewUserController,
 )
 
 // AllProviders combines all provider sets in dependency order
@@ -54,4 +56,3 @@ var AllProviders = wire.NewSet(
 	ServiceProviders,
 	ControllerProviders,
 )
-

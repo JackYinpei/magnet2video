@@ -28,12 +28,12 @@ type StartDownloadResponse struct {
 
 // DownloadProgressResponse response for download progress
 type DownloadProgressResponse struct {
-	InfoHash       string  `json:"info_hash"`       // Info hash
-	Name           string  `json:"name"`            // Torrent name
-	TotalSize      int64   `json:"total_size"`      // Total size in bytes
-	DownloadedSize int64   `json:"downloaded_size"` // Downloaded size in bytes
-	Progress       float64 `json:"progress"`        // Progress percentage
-	Status         string  `json:"status"`          // Status: downloading, completed, paused, etc.
+	InfoHash              string  `json:"info_hash"`               // Info hash
+	Name                  string  `json:"name"`                    // Torrent name
+	TotalSize             int64   `json:"total_size"`              // Total size in bytes
+	DownloadedSize        int64   `json:"downloaded_size"`         // Downloaded size in bytes
+	Progress              float64 `json:"progress"`                // Progress percentage
+	Status                string  `json:"status"`                  // Status: downloading, completed, paused, etc.
 	Peers                 int     `json:"peers"`                   // Active peers
 	Seeds                 int     `json:"seeds"`                   // Connected seeds
 	DownloadSpeed         int64   `json:"download_speed"`          // Bytes per second
@@ -60,15 +60,16 @@ type RemoveTorrentResponse struct {
 
 // TorrentListItem represents a torrent in the list response
 type TorrentListItem struct {
-	InfoHash   string  `json:"info_hash"`   // Info hash
-	Name       string  `json:"name"`        // Torrent name
-	TotalSize  int64   `json:"total_size"`  // Total size in bytes
-	Progress   float64 `json:"progress"`    // Progress percentage
-	Status     int     `json:"status"`      // Status code
+	InfoHash              string  `json:"info_hash"`               // Info hash
+	Name                  string  `json:"name"`                    // Torrent name
+	TotalSize             int64   `json:"total_size"`              // Total size in bytes
+	Progress              float64 `json:"progress"`                // Progress percentage
+	Status                int     `json:"status"`                  // Status code
 	PosterPath            string  `json:"poster_path"`             // Poster path or URL
 	CreatedAt             int64   `json:"created_at"`              // Creation timestamp
 	DownloadSpeed         int64   `json:"download_speed"`          // Bytes per second
 	DownloadSpeedReadable string  `json:"download_speed_readable"` // Human readable speed
+	IsPublic              bool    `json:"is_public"`               // Whether the torrent is publicly shared
 }
 
 // TorrentListResponse response for listing torrents

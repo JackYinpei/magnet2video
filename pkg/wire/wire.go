@@ -39,6 +39,7 @@ type Container struct {
 	// Controllers
 	TestController    *controller.TestController
 	TorrentController *controller.TorrentController
+	UserController    *controller.UserController
 
 	// Services
 
@@ -52,4 +53,3 @@ func NewContainer(config *configs.Config) (*Container, error) {
 		wire.Struct(new(Container), "*"),
 	))
 }
-

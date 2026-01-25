@@ -24,8 +24,10 @@ type TorrentService interface {
 	ResumeDownload(c *gin.Context, req *dto.ResumeDownloadRequest) (*vo.ResumeDownloadResponse, error)
 	// RemoveTorrent removes a torrent from the system
 	RemoveTorrent(c *gin.Context, req *dto.RemoveTorrentRequest) (*vo.RemoveTorrentResponse, error)
-	// ListTorrents lists all torrents
+	// ListTorrents lists torrents for the current user
 	ListTorrents(c *gin.Context) (*vo.TorrentListResponse, error)
+	// ListPublicTorrents lists all public torrents
+	ListPublicTorrents(c *gin.Context) (*vo.TorrentListResponse, error)
 	// GetTorrentDetail gets detailed information about a torrent
 	GetTorrentDetail(c *gin.Context, infoHash string) (*vo.TorrentDetailResponse, error)
 	// GetFilePath returns the file path for serving

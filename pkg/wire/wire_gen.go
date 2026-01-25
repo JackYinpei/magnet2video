@@ -23,7 +23,7 @@ import (
 
 // NewContainer initializes the complete application container using Wire
 func NewContainer(config *configs.Config) (*Container, error) {
-	v, err := ai.New(config)
+	manager, err := ai.New(config)
 	if err != nil {
 		return nil, err
 	}
@@ -42,13 +42,15 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	if err != nil {
 		return nil, err
 	}
-	testService := impl.NewTestService(loggerManager, redisManager, v)
+	testService := impl.NewTestService(loggerManager, redisManager, manager)
 	testController := controller.NewTestController(testService, sseManager)
 	torrentService := impl.NewTorrentService(loggerManager, databaseManager, torrentManager)
 	torrentController := controller.NewTorrentController(torrentService)
+	userService := impl.NewUserService(loggerManager, databaseManager)
+	userController := controller.NewUserController(userService)
 	container := &Container{
 		Config:            config,
-		AIManager:         v,
+		AIManager:         manager,
 		DatabaseManager:   databaseManager,
 		RedisManager:      redisManager,
 		LoggerManager:     loggerManager,
@@ -57,6 +59,7 @@ func NewContainer(config *configs.Config) (*Container, error) {
 		TorrentManager:    torrentManager,
 		TestController:    testController,
 		TorrentController: torrentController,
+		UserController:    userController,
 	}
 	return container, nil
 }
@@ -79,4 +82,5 @@ type Container struct {
 	// Controllers
 	TestController    *controller.TestController
 	TorrentController *controller.TorrentController
+	UserController    *controller.UserController
 }
