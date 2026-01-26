@@ -83,6 +83,8 @@ type AdminStatsResponse struct {
 	TotalTorrents      int64 `json:"total_torrents"`       // Total torrent count
 	TotalStorage       int64 `json:"total_storage"`        // Total storage in bytes (from database)
 	ActualDiskUsage    int64 `json:"actual_disk_usage"`    // Actual disk usage in bytes
+	DiskTotal          int64 `json:"disk_total"`           // Total disk capacity in bytes
+	DiskFree           int64 `json:"disk_free"`            // Free disk space in bytes
 	TranscodingJobs    int64 `json:"transcoding_jobs"`     // Active transcoding jobs
 	CompletedDownloads int64 `json:"completed_downloads"`  // Completed downloads count
 	ActiveDownloads    int64 `json:"active_downloads"`     // Active downloads count

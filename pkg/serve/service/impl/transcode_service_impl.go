@@ -359,3 +359,13 @@ func (ts *TranscodeServiceImpl) CancelTranscode(c *gin.Context, jobID int64) (*v
 		Message: "Transcode job canceled",
 	}, nil
 }
+
+// TriggerTranscodeCheck triggers transcode check for a torrent (called asynchronously after download completes)
+func (ts *TranscodeServiceImpl) TriggerTranscodeCheck(torrentID int64) {
+	ts.loggerManager.Logger().Infof("Triggering transcode check for torrent ID: %d", torrentID)
+
+	// Use a background context since this is called asynchronously
+	if err := ts.CheckAndQueueTranscode(&gin.Context{}, torrentID); err != nil {
+		ts.loggerManager.Logger().Errorf("Failed to check and queue transcode: %v", err)
+	}
+}

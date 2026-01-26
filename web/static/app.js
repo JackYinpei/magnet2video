@@ -829,12 +829,23 @@ function stopProgressPolling() {
 
 // Render transcode status for a torrent
 function renderTranscodeStatus(torrent) {
+    // Show "待检测" for downloading torrents with transcode_status = 0
+    if (torrent.transcode_status === 0 && torrent.status !== 2) {
+        return `
+            <div class="download-transcode">
+                <div class="download-transcode-label">
+                    转码状态: <span class="transcode-badge pending">待检测</span>
+                </div>
+            </div>
+        `;
+    }
+
     // Only show if transcode_status exists and is not 0 (no transcode needed)
     if (!torrent.transcode_status || torrent.transcode_status === 0) {
         return '';
     }
 
-    const statusText = getTranscodeText(torrent.transcode_status);
+    const statusText = getTranscodeText(torrent.transcode_status, torrent.status);
     const statusClass = getTranscodeClass(torrent.transcode_status);
     const progress = torrent.transcode_progress || 0;
     const transcoded = torrent.transcoded_count || 0;
@@ -1269,7 +1280,7 @@ function renderAdminResources(torrents, total) {
             <td>${formatSize(torrent.total_size)}</td>
             <td><span class="status-badge ${getStatusClass(torrent.status)}">${getStatusText(torrent.status)}</span></td>
             <td>${torrent.progress?.toFixed(1) || 0}%</td>
-            <td><span class="transcode-badge ${getTranscodeClass(torrent.transcode_status)}">${getTranscodeText(torrent.transcode_status)}</span></td>
+            <td><span class="transcode-badge ${getTranscodeClass(torrent.transcode_status)}">${getTranscodeText(torrent.transcode_status, torrent.status)}</span></td>
             <td>${torrent.creator_nickname || '-'}</td>
             <td>${formatDate(torrent.created_at)}</td>
             <td class="actions">
@@ -1292,10 +1303,16 @@ async function loadAdminStats() {
         document.getElementById('stat-total-users').textContent = data.total_users || 0;
         document.getElementById('stat-total-torrents').textContent = data.total_torrents || 0;
         document.getElementById('stat-total-storage').textContent = formatSize(data.total_storage || 0);
-        document.getElementById('stat-disk-usage').textContent = formatSize(data.disk_usage || 0);
+        document.getElementById('stat-disk-usage').textContent = formatSize(data.actual_disk_usage || 0);
         document.getElementById('stat-active-downloads').textContent = data.active_downloads || 0;
         document.getElementById('stat-completed-downloads').textContent = data.completed_downloads || 0;
         document.getElementById('stat-transcoding-jobs').textContent = data.transcoding_jobs || 0;
+
+        // System disk info
+        if (data.disk_total) {
+            document.getElementById('stat-disk-total').textContent = formatSize(data.disk_total);
+            document.getElementById('stat-disk-free').textContent = formatSize(data.disk_free || 0);
+        }
     } catch (error) {
         console.error('加载统计信息失败:', error);
     }
@@ -1425,7 +1442,11 @@ function getStatusClass(status) {
     return classMap[status] || 'pending';
 }
 
-function getTranscodeText(status) {
+function getTranscodeText(status, downloadStatus = 2) {
+    // If download is not completed and transcode_status is 0, show "待检测"
+    if (status === 0 && downloadStatus !== 2) {
+        return '待检测';
+    }
     const textMap = {
         0: '无需转码',
         1: '待转码',

@@ -70,6 +70,10 @@ type TorrentListItem struct {
 	DownloadSpeed         int64   `json:"download_speed"`          // Bytes per second
 	DownloadSpeedReadable string  `json:"download_speed_readable"` // Human readable speed
 	IsPublic              bool    `json:"is_public"`               // Whether the torrent is publicly shared
+	TranscodeStatus       int     `json:"transcode_status"`        // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
+	TranscodeProgress     int     `json:"transcode_progress"`      // Transcode progress 0-100
+	TranscodedCount       int     `json:"transcoded_count"`        // Number of transcoded files
+	TotalTranscode        int     `json:"total_transcode"`         // Total files needing transcode
 }
 
 // TorrentListResponse response for listing torrents

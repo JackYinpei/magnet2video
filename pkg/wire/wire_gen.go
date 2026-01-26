@@ -58,7 +58,13 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	adminService := impl.NewAdminService(loggerManager, databaseManager, torrentManager)
 	adminController := controller.NewAdminController(adminService)
 	transcodeService := impl.NewTranscodeService(config, loggerManager, databaseManager, torrentManager, queueProducer)
-	_ = transcodeService // TranscodeService is used by Kafka consumer, not directly by controllers
+
+	// Connect TorrentService with TranscodeService for download completion callback
+	if ts, ok := torrentService.(*impl.TorrentServiceImpl); ok {
+		if tc, ok := transcodeService.(*impl.TranscodeServiceImpl); ok {
+			ts.SetTranscodeChecker(tc)
+		}
+	}
 	container := &Container{
 		Config:            config,
 		AIManager:         manager,

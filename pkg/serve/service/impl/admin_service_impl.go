@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -413,11 +414,23 @@ func (as *AdminServiceImpl) GetStats(c *gin.Context) (*vo.AdminStatsResponse, er
 		})
 	}
 
+	// Get disk total and free space
+	var diskTotal, diskFree int64
+	if downloadDir != "" {
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(downloadDir, &stat); err == nil {
+			diskTotal = int64(stat.Blocks) * int64(stat.Bsize)
+			diskFree = int64(stat.Bavail) * int64(stat.Bsize)
+		}
+	}
+
 	return &vo.AdminStatsResponse{
 		TotalUsers:         totalUsers,
 		TotalTorrents:      totalTorrents,
 		TotalStorage:       totalStorage,
 		ActualDiskUsage:    actualDiskUsage,
+		DiskTotal:          diskTotal,
+		DiskFree:           diskFree,
 		TranscodingJobs:    transcodingJobs,
 		CompletedDownloads: completedDownloads,
 		ActiveDownloads:    activeDownloads,
