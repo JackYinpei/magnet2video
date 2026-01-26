@@ -947,8 +947,10 @@ async function openPlayer(infoHash, isOwner = false) {
                 const icon = isVideo ? '🎬' : (isSubtitle ? '📝' : '📄');
                 const hasTranscoded = file.transcode_status === 3 && file.transcoded_path;
                 const transcodeStatusText = getFileTranscodeStatus(file);
+                // File is playable if: (video AND streamable) OR has transcoded version
+                const isPlayable = isVideo && (file.is_streamable || hasTranscoded);
                 return `
-                        <div class="player-file-item ${!isVideo || !file.is_streamable ? 'disabled' : ''}"
+                        <div class="player-file-item ${!isPlayable ? 'disabled' : ''}"
                              data-index="${index}"
                              data-path="${file.path}"
                              data-transcoded-path="${file.transcoded_path || ''}"
@@ -979,7 +981,10 @@ async function openPlayer(infoHash, isOwner = false) {
             });
 
             // 自动播放第一个可播放的文件
-            const firstPlayable = data.files.find(f => isVideoFile(f.path) && f.is_streamable);
+            // Playable = (streamable) OR (has transcoded version)
+            const firstPlayable = data.files.find(f =>
+                isVideoFile(f.path) && (f.is_streamable || (f.transcode_status === 3 && f.transcoded_path))
+            );
             if (firstPlayable) {
                 // Use transcoded file if available
                 const pathToPlay = (firstPlayable.transcode_status === 3 && firstPlayable.transcoded_path)
