@@ -4,12 +4,11 @@
 package controller
 
 import (
-	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -225,105 +224,24 @@ func (tc *TorrentController) ServeFile(c *gin.Context) {
 		return
 	}
 
-	// Remove leading slash from file path
-	filePath = strings.TrimPrefix(filePath, "/")
-
-	fullPath, err := tc.torrentService.GetFilePath(c, infoHash, filePath)
+	// Try to get file stream (with fuzzy matching support)
+	reader, fileInfo, err := tc.torrentService.GetFileStream(c, infoHash, filePath)
 	if err != nil {
 		c.JSON(http.StatusNotFound, vo.Fail(c, err.Error(), errorx.New(errno.ErrFileNotFound, errorx.KV("path", filePath))))
 		return
 	}
 
-	// Open the file
-	file, err := os.Open(fullPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrFileNotFound, errorx.KV("path", filePath))))
-		return
-	}
-	defer file.Close()
+	// Determine content type based on actual file path
+	contentType := getContentType(fileInfo.Path)
 
-	// Get file info
-	fileInfo, err := file.Stat()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer, errorx.KV("msg", err.Error()))))
-		return
-	}
-
-	// Determine content type
-	contentType := getContentType(filePath)
-
-	// Handle range requests for streaming
-	rangeHeader := c.GetHeader("Range")
-	if rangeHeader != "" {
-		tc.serveRangeRequest(c, file, fileInfo, contentType, rangeHeader)
-		return
-	}
-
-	// Serve the entire file
+	// Set headers
 	c.Header("Content-Type", contentType)
-	c.Header("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
-	c.Header("Accept-Ranges", "bytes")
-	c.Header("Content-Disposition", "inline; filename=\""+filepath.Base(filePath)+"\"")
-
-	io.Copy(c.Writer, file)
-}
-
-// serveRangeRequest handles HTTP range requests for video streaming
-func (tc *TorrentController) serveRangeRequest(c *gin.Context, file *os.File, fileInfo os.FileInfo, contentType string, rangeHeader string) {
-	fileSize := fileInfo.Size()
-
-	// Parse range header
-	rangeHeader = strings.TrimPrefix(rangeHeader, "bytes=")
-	rangeParts := strings.Split(rangeHeader, "-")
-
-	var start, end int64
-	var err error
-
-	if rangeParts[0] != "" {
-		start, err = strconv.ParseInt(rangeParts[0], 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "invalid range"))))
-			return
-		}
-	}
-
-	if len(rangeParts) > 1 && rangeParts[1] != "" {
-		end, err = strconv.ParseInt(rangeParts[1], 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "invalid range"))))
-			return
-		}
-	} else {
-		// Default chunk size: 1MB
-		end = start + 1024*1024 - 1
-		if end >= fileSize {
-			end = fileSize - 1
-		}
-	}
-
-	if start >= fileSize || end >= fileSize || start > end {
-		c.Header("Content-Range", "bytes */"+strconv.FormatInt(fileSize, 10))
-		c.Status(http.StatusRequestedRangeNotSatisfiable)
-		return
-	}
-
-	// Seek to start position
-	_, err = file.Seek(start, 0)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer, errorx.KV("msg", err.Error()))))
-		return
-	}
-
-	contentLength := end - start + 1
-
-	c.Header("Content-Type", contentType)
-	c.Header("Content-Length", strconv.FormatInt(contentLength, 10))
-	c.Header("Content-Range", "bytes "+strconv.FormatInt(start, 10)+"-"+strconv.FormatInt(end, 10)+"/"+strconv.FormatInt(fileSize, 10))
-	c.Header("Accept-Ranges", "bytes")
-	c.Status(http.StatusPartialContent)
-
-	// Copy only the requested range
-	io.CopyN(c.Writer, file, contentLength)
+	c.Header("Content-Disposition", "inline; filename=\""+filepath.Base(fileInfo.Path)+"\"")
+	
+	// Delegate to http.ServeContent which handles Range requests and multipart ranges automatically
+	// We use a zero time for ModTime to avoid caching issues with changing content, 
+	// or we could use the torrent creation time if available.
+	http.ServeContent(c.Writer, c.Request, filepath.Base(fileInfo.Path), time.Time{}, reader)
 }
 
 // getContentType determines the content type based on file extension

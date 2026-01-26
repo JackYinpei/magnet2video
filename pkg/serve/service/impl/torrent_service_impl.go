@@ -6,6 +6,7 @@ package impl
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -387,6 +388,24 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 func (ts *TorrentServiceImpl) GetFilePath(c *gin.Context, infoHash string, filePath string) (string, error) {
 	client := ts.torrentManager.Client()
 	return client.GetFilePath(infoHash, filePath)
+}
+
+// GetFileStream returns the file stream for serving
+func (ts *TorrentServiceImpl) GetFileStream(c *gin.Context, infoHash string, filePath string) (io.ReadSeeker, *vo.TorrentFileInfo, error) {
+	client := ts.torrentManager.Client()
+	reader, info, err := client.GetFileReader(infoHash, filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fileInfo := &vo.TorrentFileInfo{
+		Path:         info.Path,
+		Size:         info.Size,
+		SizeReadable: formatSize(info.Size),
+		IsStreamable: info.IsStreamable,
+	}
+
+	return reader, fileInfo, nil
 }
 
 // Helper functions

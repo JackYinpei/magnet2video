@@ -4,6 +4,8 @@
 package service
 
 import (
+	"io"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
@@ -32,4 +34,6 @@ type TorrentService interface {
 	GetTorrentDetail(c *gin.Context, infoHash string) (*vo.TorrentDetailResponse, error)
 	// GetFilePath returns the file path for serving
 	GetFilePath(c *gin.Context, infoHash string, filePath string) (string, error)
+	// GetFileStream returns the file reader for serving
+	GetFileStream(c *gin.Context, infoHash string, filePath string) (io.ReadSeeker, *vo.TorrentFileInfo, error)
 }
