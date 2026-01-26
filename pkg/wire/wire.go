@@ -10,6 +10,7 @@ import (
 
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/ai"
+	"github.com/Done-0/gin-scaffold/internal/cache"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
@@ -28,6 +29,7 @@ type Container struct {
 
 	// Infrastructure
 	AIManager       *ai.AIManager
+	CacheManager    cache.CacheManager
 	DatabaseManager db.DatabaseManager
 	RedisManager    redis.RedisManager
 	LoggerManager   logger.LoggerManager

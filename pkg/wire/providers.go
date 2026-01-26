@@ -7,6 +7,7 @@ import (
 	"github.com/google/wire"
 
 	"github.com/Done-0/gin-scaffold/internal/ai"
+	"github.com/Done-0/gin-scaffold/internal/cache"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
@@ -23,6 +24,7 @@ import (
 // InfrastructureProviders provides infrastructure layer dependencies
 var InfrastructureProviders = wire.NewSet(
 	ai.New,
+	cache.New,
 	db.New,
 	logger.New,
 	i18n.New,

@@ -9,6 +9,7 @@ package wire
 import (
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/ai"
+	"github.com/Done-0/gin-scaffold/internal/cache"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
@@ -36,6 +37,7 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	if err != nil {
 		return nil, err
 	}
+	cacheManager := cache.New(redisManager, loggerManager)
 	i18nManager := i18n.New()
 	sseManager := sse.New(config)
 	torrentManager, err := torrent.New(config)
@@ -44,13 +46,14 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	}
 	testService := impl.NewTestService(loggerManager, redisManager, manager)
 	testController := controller.NewTestController(testService, sseManager)
-	torrentService := impl.NewTorrentService(loggerManager, databaseManager, torrentManager)
+	torrentService := impl.NewTorrentService(loggerManager, databaseManager, torrentManager, cacheManager)
 	torrentController := controller.NewTorrentController(torrentService)
 	userService := impl.NewUserService(loggerManager, databaseManager)
 	userController := controller.NewUserController(userService)
 	container := &Container{
 		Config:            config,
 		AIManager:         manager,
+		CacheManager:      cacheManager,
 		DatabaseManager:   databaseManager,
 		RedisManager:      redisManager,
 		LoggerManager:     loggerManager,
@@ -72,6 +75,7 @@ type Container struct {
 
 	// Infrastructure
 	AIManager       *ai.AIManager
+	CacheManager    cache.CacheManager
 	DatabaseManager db.DatabaseManager
 	RedisManager    redis.RedisManager
 	LoggerManager   logger.LoggerManager

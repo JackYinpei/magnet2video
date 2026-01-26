@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"github.com/Done-0/gin-scaffold/internal/cache"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/logger"
 	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
@@ -27,6 +28,7 @@ type TorrentServiceImpl struct {
 	loggerManager  logger.LoggerManager
 	dbManager      db.DatabaseManager
 	torrentManager torrent.TorrentManager
+	cacheManager   cache.CacheManager
 }
 
 // NewTorrentService creates torrent service implementation
@@ -34,11 +36,13 @@ func NewTorrentService(
 	loggerManager logger.LoggerManager,
 	dbManager db.DatabaseManager,
 	torrentManager torrent.TorrentManager,
+	cacheManager cache.CacheManager,
 ) service.TorrentService {
 	instance := &TorrentServiceImpl{
 		loggerManager:  loggerManager,
 		dbManager:      dbManager,
 		torrentManager: torrentManager,
+		cacheManager:   cacheManager,
 	}
 
 	// Restore torrents in background
@@ -164,6 +168,9 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 		}
 	}
 
+	// 数据库更新成功后失效缓存
+	ts.invalidateTorrentListCache(userID)
+
 	return &vo.StartDownloadResponse{
 		InfoHash: req.InfoHash,
 		Message:  "Download started successfully",
@@ -264,39 +271,62 @@ func (ts *TorrentServiceImpl) RemoveTorrent(c *gin.Context, req *dto.RemoveTorre
 		ts.loggerManager.Logger().Warnf("failed to delete torrent from database: %v", err)
 	}
 
+	// 删除后失效缓存
+	userID := auth.GetUserID(c)
+	ts.invalidateTorrentListCache(userID)
+
 	return &vo.RemoveTorrentResponse{
 		InfoHash: req.InfoHash,
 		Message:  "Torrent removed successfully",
 	}, nil
 }
 
-// ListTorrents lists torrents for the current user
-// If user is authenticated, only returns their torrents
-// If not authenticated, returns empty list
+// ListTorrents 获取当前用户的 torrent 列表
+// 如果用户已认证，只返回该用户的 torrents
+// 如果未认证，返回空列表
+// 使用 Redis 缓存数据库查询，实时统计数据始终是最新的
 func (ts *TorrentServiceImpl) ListTorrents(c *gin.Context) (*vo.TorrentListResponse, error) {
 	userID := auth.GetUserID(c)
 
-	var torrents []torrentModel.Torrent
-
-	query := ts.dbManager.DB().Where("deleted = ?", false)
-
-	// If user is authenticated, filter by their user ID
-	if userID > 0 {
-		query = query.Where("creator_id = ?", userID)
-	} else {
-		// Not authenticated, return empty list
+	// 未认证，返回空列表
+	if userID == 0 {
 		return &vo.TorrentListResponse{
 			Torrents: []vo.TorrentListItem{},
 			Total:    0,
 		}, nil
 	}
 
-	if err := query.Order("created_at DESC").Find(&torrents).Error; err != nil {
-		ts.loggerManager.Logger().Errorf("failed to list torrents: %v", err)
-		return nil, err
+	ctx := c.Request.Context()
+	cacheKey := cache.TorrentListKey(userID)
+
+	// 优先从缓存获取
+	var cachedTorrents []torrentModel.Torrent
+	err := ts.cacheManager.Get(ctx, cacheKey, &cachedTorrents)
+
+	if err != nil {
+		if err != cache.ErrCacheMiss {
+			ts.loggerManager.Logger().Warnf("Cache get error: %v", err)
+		}
+
+		// 缓存未命中或出错，从数据库加载
+		query := ts.dbManager.DB().Where("deleted = ? AND creator_id = ?", false, userID)
+		if err := query.Order("created_at DESC").Find(&cachedTorrents).Error; err != nil {
+			ts.loggerManager.Logger().Errorf("failed to list torrents: %v", err)
+			return nil, err
+		}
+
+		// 异步存储到缓存
+		go func() {
+			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if setErr := ts.cacheManager.Set(cacheCtx, cacheKey, cachedTorrents, cache.TTLTorrentList); setErr != nil {
+				ts.loggerManager.Logger().Warnf("Failed to cache torrent list: %v", setErr)
+			}
+		}()
 	}
 
-	items := ts.torrentListToItems(torrents)
+	// 转换为列表项，包含实时统计数据（始终是最新的，不缓存）
+	items := ts.torrentListToItems(cachedTorrents)
 
 	return &vo.TorrentListResponse{
 		Torrents: items,
@@ -304,18 +334,41 @@ func (ts *TorrentServiceImpl) ListTorrents(c *gin.Context) (*vo.TorrentListRespo
 	}, nil
 }
 
-// ListPublicTorrents lists all public torrents
+// ListPublicTorrents 获取所有公开的 torrent 列表
+// 使用 Redis 缓存数据库查询，实时统计数据始终是最新的
 func (ts *TorrentServiceImpl) ListPublicTorrents(c *gin.Context) (*vo.TorrentListResponse, error) {
-	var torrents []torrentModel.Torrent
+	ctx := c.Request.Context()
+	cacheKey := cache.PublicTorrentListKey()
 
-	if err := ts.dbManager.DB().Where("deleted = ? AND is_public = ?", false, true).
-		Order("created_at DESC").
-		Find(&torrents).Error; err != nil {
-		ts.loggerManager.Logger().Errorf("failed to list public torrents: %v", err)
-		return nil, err
+	// 优先从缓存获取
+	var cachedTorrents []torrentModel.Torrent
+	err := ts.cacheManager.Get(ctx, cacheKey, &cachedTorrents)
+
+	if err != nil {
+		if err != cache.ErrCacheMiss {
+			ts.loggerManager.Logger().Warnf("Cache get error: %v", err)
+		}
+
+		// 缓存未命中或出错，从数据库加载
+		if err := ts.dbManager.DB().Where("deleted = ? AND is_public = ?", false, true).
+			Order("created_at DESC").
+			Find(&cachedTorrents).Error; err != nil {
+			ts.loggerManager.Logger().Errorf("failed to list public torrents: %v", err)
+			return nil, err
+		}
+
+		// 异步存储到缓存
+		go func() {
+			cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if setErr := ts.cacheManager.Set(cacheCtx, cacheKey, cachedTorrents, cache.TTLPublicList); setErr != nil {
+				ts.loggerManager.Logger().Warnf("Failed to cache public torrent list: %v", setErr)
+			}
+		}()
 	}
 
-	items := ts.torrentListToItems(torrents)
+	// 转换为列表项，包含实时统计数据（始终是最新的，不缓存）
+	items := ts.torrentListToItems(cachedTorrents)
 
 	return &vo.TorrentListResponse{
 		Torrents: items,
@@ -486,4 +539,29 @@ func (ts *TorrentServiceImpl) restoreTorrents() {
 			ts.loggerManager.Logger().Infof("Restored torrent: %s", t.Name)
 		}
 	}
+}
+
+// invalidateTorrentListCache 在数据变更后失效 torrent 列表缓存
+// 异步调用，不阻塞响应
+func (ts *TorrentServiceImpl) invalidateTorrentListCache(userID int64) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var keysToDelete []string
+
+		// 失效用户的列表缓存
+		if userID > 0 {
+			keysToDelete = append(keysToDelete, cache.TorrentListKey(userID))
+		}
+
+		// 失效公共列表缓存（以防 torrent 变为公开或私有）
+		keysToDelete = append(keysToDelete, cache.PublicTorrentListKey())
+
+		if err := ts.cacheManager.Delete(ctx, keysToDelete...); err != nil {
+			ts.loggerManager.Logger().Warnf("Failed to invalidate cache: %v", err)
+		} else {
+			ts.loggerManager.Logger().Debugf("Cache invalidated for keys: %v", keysToDelete)
+		}
+	}()
 }
