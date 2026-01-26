@@ -5,6 +5,7 @@ package controller
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -238,9 +239,62 @@ func (tc *TorrentController) ServeFile(c *gin.Context) {
 	c.Header("Content-Disposition", "inline; filename=\""+filepath.Base(fileInfo.Path)+"\"")
 	
 	// Delegate to http.ServeContent which handles Range requests and multipart ranges automatically
-	// We use a zero time for ModTime to avoid caching issues with changing content, 
+	// We use a zero time for ModTime to avoid caching issues with changing content,
 	// or we could use the torrent creation time if available.
 	http.ServeContent(c.Writer, c.Request, filepath.Base(fileInfo.Path), time.Time{}, reader)
+}
+
+// ServeTranscodedFile serves a transcoded file from the download directory
+// @Router /api/v1/torrent/transcoded/*file_path [get]
+func (tc *TorrentController) ServeTranscodedFile(c *gin.Context) {
+	filePath := c.Param("file_path")
+	if filePath == "" {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "file_path is required"))))
+		return
+	}
+
+	// Security: Only allow files with _transcoded.mp4 suffix
+	if !strings.HasSuffix(filePath, "_transcoded.mp4") {
+		c.JSON(http.StatusForbidden, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "only transcoded files can be served"))))
+		return
+	}
+
+	// Build full path (download directory + file path)
+	downloadDir := tc.torrentService.GetDownloadDir()
+	fullPath := filepath.Join(downloadDir, filePath)
+
+	// Security: Prevent path traversal
+	cleanPath := filepath.Clean(fullPath)
+	if !strings.HasPrefix(cleanPath, filepath.Clean(downloadDir)) {
+		c.JSON(http.StatusForbidden, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "invalid file path"))))
+		return
+	}
+
+	// Check if file exists
+	fileInfo, err := os.Stat(cleanPath)
+	if os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, vo.Fail(c, nil, errorx.New(errno.ErrFileNotFound, errorx.KV("path", filePath))))
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), nil))
+		return
+	}
+
+	// Open file
+	file, err := os.Open(cleanPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), nil))
+		return
+	}
+	defer file.Close()
+
+	// Set headers
+	c.Header("Content-Type", "video/mp4")
+	c.Header("Content-Disposition", "inline; filename=\""+filepath.Base(cleanPath)+"\"")
+
+	// Serve file with Range request support
+	http.ServeContent(c.Writer, c.Request, filepath.Base(cleanPath), fileInfo.ModTime(), file)
 }
 
 // getContentType determines the content type based on file extension

@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/IBM/sarama"
 
@@ -29,7 +30,7 @@ type Consumer struct {
 func NewConsumer(config *configs.Config, handler Handler) (*Consumer, error) {
 	kafkaConfig := sarama.NewConfig()
 	kafkaConfig.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
-	kafkaConfig.Consumer.Offsets.Initial = sarama.OffsetNewest
+	kafkaConfig.Consumer.Offsets.Initial = sarama.OffsetOldest
 
 	consumerGroup, err := sarama.NewConsumerGroup(config.KafkaConfig.Brokers, config.KafkaConfig.ConsumerGroup, kafkaConfig)
 	if err != nil {
@@ -50,6 +51,7 @@ func (c *Consumer) Subscribe(topics []string) error {
 	go func() {
 		for {
 			if err := c.consumer.Consume(c.ctx, topics, c); err != nil {
+				log.Printf("Kafka consumer error: %v", err)
 				return
 			}
 			if c.ctx.Err() != nil {

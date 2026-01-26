@@ -945,12 +945,16 @@ async function openPlayer(infoHash, isOwner = false) {
                 const isVideo = isVideoFile(file.path);
                 const isSubtitle = isSubtitleFile(file.path);
                 const icon = isVideo ? '🎬' : (isSubtitle ? '📝' : '📄');
+                const hasTranscoded = file.transcode_status === 3 && file.transcoded_path;
+                const transcodeStatusText = getFileTranscodeStatus(file);
                 return `
-                        <div class="player-file-item ${!isVideo || !file.is_streamable ? 'disabled' : ''}" 
-                             data-index="${index}" 
+                        <div class="player-file-item ${!isVideo || !file.is_streamable ? 'disabled' : ''}"
+                             data-index="${index}"
                              data-path="${file.path}"
+                             data-transcoded-path="${file.transcoded_path || ''}"
+                             data-transcode-status="${file.transcode_status || 0}"
                              data-streamable="${file.is_streamable}">
-                            <span>${icon} ${file.path}</span>
+                            <span>${icon} ${file.path} ${transcodeStatusText}</span>
                             <span>${file.size_readable || formatSize(file.size)}</span>
                         </div>
                     `;
@@ -960,7 +964,12 @@ async function openPlayer(infoHash, isOwner = false) {
             // 绑定文件点击事件
             elements.playerFiles.querySelectorAll('.player-file-item:not(.disabled)').forEach(item => {
                 item.addEventListener('click', () => {
-                    playFile(item.dataset.path);
+                    const filePath = item.dataset.path;
+                    const transcodedPath = item.dataset.transcodedPath;
+                    const transcodeStatus = parseInt(item.dataset.transcodeStatus) || 0;
+                    // Use transcoded file if available (status === 3 means completed)
+                    const pathToPlay = (transcodeStatus === 3 && transcodedPath) ? transcodedPath : filePath;
+                    playFile(pathToPlay, filePath);
                     // 更新选中状态
                     elements.playerFiles.querySelectorAll('.player-file-item').forEach(i => {
                         i.classList.remove('active');
@@ -972,7 +981,11 @@ async function openPlayer(infoHash, isOwner = false) {
             // 自动播放第一个可播放的文件
             const firstPlayable = data.files.find(f => isVideoFile(f.path) && f.is_streamable);
             if (firstPlayable) {
-                playFile(firstPlayable.path);
+                // Use transcoded file if available
+                const pathToPlay = (firstPlayable.transcode_status === 3 && firstPlayable.transcoded_path)
+                    ? firstPlayable.transcoded_path
+                    : firstPlayable.path;
+                playFile(pathToPlay, firstPlayable.path);
             }
         }
 
@@ -1001,8 +1014,21 @@ async function togglePublicFromPlayer(infoHash, isPublic) {
     `;
 }
 
-async function playFile(filePath) {
-    const videoUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+async function playFile(filePath, originalPath = null) {
+    // originalPath is used for subtitle matching when playing transcoded files
+    const subtitleMatchPath = originalPath || filePath;
+
+    // Determine if this is a transcoded file
+    let videoUrl;
+    if (filePath.endsWith('_transcoded.mp4')) {
+        // For transcoded files, use the transcoded endpoint
+        // Remove leading ./ or / from the path
+        let relativePath = filePath.replace(/^\.\/download\//, '').replace(/^\/download\//, '').replace(/^download\//, '');
+        videoUrl = `${TORRENT_API}/transcoded/${encodeURIComponent(relativePath)}`;
+    } else {
+        // For original files, use the standard endpoint
+        videoUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+    }
 
     // Clean up previous subtitle blob URL
     if (currentSubtitleBlobUrl) {
@@ -1016,8 +1042,8 @@ async function playFile(filePath) {
 
     elements.videoPlayer.src = videoUrl;
 
-    // Try to find and load matching subtitle automatically
-    const matchingSubtitle = findMatchingSubtitle(filePath, currentSubtitleFiles);
+    // Try to find and load matching subtitle automatically (use original path for matching)
+    const matchingSubtitle = findMatchingSubtitle(subtitleMatchPath, currentSubtitleFiles);
     if (matchingSubtitle) {
         await loadAndAttachSubtitle(matchingSubtitle.path);
         // Update subtitle selector UI
@@ -1466,6 +1492,20 @@ function getTranscodeClass(status) {
         4: 'failed'
     };
     return classMap[status] || 'none';
+}
+
+// Get transcode status text for individual file in player
+function getFileTranscodeStatus(file) {
+    if (!file.transcode_status || file.transcode_status === 0) {
+        return '';
+    }
+    const statusMap = {
+        1: '<span class="file-transcode-badge pending">待转码</span>',
+        2: '<span class="file-transcode-badge processing">转码中</span>',
+        3: '<span class="file-transcode-badge completed">已转码</span>',
+        4: '<span class="file-transcode-badge failed">转码失败</span>'
+    };
+    return statusMap[file.transcode_status] || '';
 }
 
 // ============ 事件监听初始化 ============

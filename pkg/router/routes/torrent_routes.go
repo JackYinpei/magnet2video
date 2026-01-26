@@ -23,6 +23,9 @@ func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 
 		// Serve downloaded file with streaming support (public access for shared files)
 		publicTorrent.GET("/file/:info_hash/*file_path", container.TorrentController.ServeFile)
+
+		// Serve transcoded file from download directory
+		publicTorrent.GET("/transcoded/*file_path", container.TorrentController.ServeTranscodedFile)
 	}
 
 	// Protected routes (auth required) - for managing own resources

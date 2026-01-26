@@ -490,11 +490,13 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 	files := make([]vo.TorrentFileInfo, len(t.Files))
 	for i, f := range t.Files {
 		files[i] = vo.TorrentFileInfo{
-			Index:        i,
-			Path:         f.Path,
-			Size:         f.Size,
-			SizeReadable: formatSize(f.Size),
-			IsStreamable: f.IsStreamable,
+			Index:           i,
+			Path:            f.Path,
+			Size:            f.Size,
+			SizeReadable:    formatSize(f.Size),
+			IsStreamable:    f.IsStreamable,
+			TranscodeStatus: f.TranscodeStatus,
+			TranscodedPath:  f.TranscodedPath,
 		}
 	}
 
@@ -533,6 +535,11 @@ func (ts *TorrentServiceImpl) GetFileStream(c *gin.Context, infoHash string, fil
 	}
 
 	return reader, fileInfo, nil
+}
+
+// GetDownloadDir returns the download directory path
+func (ts *TorrentServiceImpl) GetDownloadDir() string {
+	return ts.torrentManager.Client().GetDownloadDir()
 }
 
 // Helper functions

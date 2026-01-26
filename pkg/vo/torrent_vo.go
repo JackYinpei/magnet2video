@@ -5,11 +5,13 @@ package vo
 
 // TorrentFileInfo represents a file in a torrent response
 type TorrentFileInfo struct {
-	Index        int    `json:"index"`         // File index
-	Path         string `json:"path"`          // File path
-	Size         int64  `json:"size"`          // File size in bytes
-	SizeReadable string `json:"size_readable"` // Human readable size
-	IsStreamable bool   `json:"is_streamable"` // Whether the file can be streamed
+	Index           int    `json:"index"`            // File index
+	Path            string `json:"path"`             // File path
+	Size            int64  `json:"size"`             // File size in bytes
+	SizeReadable    string `json:"size_readable"`    // Human readable size
+	IsStreamable    bool   `json:"is_streamable"`    // Whether the file can be streamed
+	TranscodeStatus int    `json:"transcode_status"` // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
+	TranscodedPath  string `json:"transcoded_path"`  // Path to transcoded file (if available)
 }
 
 // ParseMagnetResponse response for parsing a magnet URI

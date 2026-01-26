@@ -36,4 +36,6 @@ type TorrentService interface {
 	GetFilePath(c *gin.Context, infoHash string, filePath string) (string, error)
 	// GetFileStream returns the file reader for serving
 	GetFileStream(c *gin.Context, infoHash string, filePath string) (io.ReadSeeker, *vo.TorrentFileInfo, error)
+	// GetDownloadDir returns the download directory path
+	GetDownloadDir() string
 }
