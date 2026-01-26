@@ -120,6 +120,151 @@ function isVideoFile(path) {
     return ['mp4', 'm4v', 'webm', 'mov', 'mkv', 'avi', 'wmv', 'flv'].includes(ext);
 }
 
+function isSubtitleFile(path) {
+    const ext = path.toLowerCase().split('.').pop();
+    return ['srt', 'vtt', 'ass', 'ssa'].includes(ext);
+}
+
+// Convert SRT to WebVTT format
+function srtToVtt(srtContent) {
+    // Add WebVTT header
+    let vtt = 'WEBVTT\n\n';
+
+    // Normalize line endings
+    let content = srtContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+    // Split into blocks
+    const blocks = content.trim().split(/\n\n+/);
+
+    for (const block of blocks) {
+        const lines = block.split('\n');
+        if (lines.length < 2) continue;
+
+        // Find the timestamp line (contains -->)
+        let timestampLineIndex = -1;
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes('-->')) {
+                timestampLineIndex = i;
+                break;
+            }
+        }
+
+        if (timestampLineIndex === -1) continue;
+
+        // Convert timestamps from SRT format (00:00:00,000) to VTT format (00:00:00.000)
+        const timestampLine = lines[timestampLineIndex].replace(/,/g, '.');
+
+        // Get subtitle text (everything after timestamp line)
+        const subtitleText = lines.slice(timestampLineIndex + 1).join('\n');
+
+        if (subtitleText.trim()) {
+            vtt += timestampLine + '\n';
+            vtt += subtitleText + '\n\n';
+        }
+    }
+
+    return vtt;
+}
+
+// Fetch and convert subtitle file to VTT blob URL
+async function loadSubtitle(subtitleUrl, subtitlePath) {
+    try {
+        const response = await fetch(subtitleUrl, { headers: getAuthHeaders() });
+        if (!response.ok) {
+            throw new Error('Failed to fetch subtitle');
+        }
+
+        let content = await response.text();
+        const ext = subtitlePath.toLowerCase().split('.').pop();
+
+        // Convert to VTT if needed
+        if (ext === 'srt') {
+            content = srtToVtt(content);
+        } else if (ext === 'ass' || ext === 'ssa') {
+            // Basic ASS/SSA to VTT conversion (simplified)
+            content = assToVtt(content);
+        }
+        // VTT files don't need conversion
+
+        // Create blob URL for the VTT content
+        const blob = new Blob([content], { type: 'text/vtt' });
+        return URL.createObjectURL(blob);
+    } catch (error) {
+        console.error('Error loading subtitle:', error);
+        return null;
+    }
+}
+
+// Basic ASS/SSA to VTT conversion
+function assToVtt(assContent) {
+    let vtt = 'WEBVTT\n\n';
+
+    const lines = assContent.split(/\r?\n/);
+    const dialogueRegex = /^Dialogue:\s*\d+,([^,]+),([^,]+),[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,(.*)$/;
+
+    for (const line of lines) {
+        const match = line.match(dialogueRegex);
+        if (match) {
+            // Convert ASS timestamp (0:00:00.00) to VTT format (00:00:00.000)
+            const startTime = convertAssTime(match[1]);
+            const endTime = convertAssTime(match[2]);
+            let text = match[3];
+
+            // Remove ASS styling tags
+            text = text.replace(/\{[^}]*\}/g, '');
+            // Convert \N to newline
+            text = text.replace(/\\N/gi, '\n');
+
+            if (text.trim()) {
+                vtt += `${startTime} --> ${endTime}\n`;
+                vtt += `${text}\n\n`;
+            }
+        }
+    }
+
+    return vtt;
+}
+
+// Convert ASS timestamp to VTT format
+function convertAssTime(assTime) {
+    // ASS format: H:MM:SS.cc (centiseconds)
+    // VTT format: HH:MM:SS.mmm (milliseconds)
+    const parts = assTime.trim().split(':');
+    if (parts.length !== 3) return '00:00:00.000';
+
+    const hours = parts[0].padStart(2, '0');
+    const minutes = parts[1].padStart(2, '0');
+    const secParts = parts[2].split('.');
+    const seconds = secParts[0].padStart(2, '0');
+    const centiseconds = secParts[1] || '00';
+    const milliseconds = (parseInt(centiseconds) * 10).toString().padStart(3, '0');
+
+    return `${hours}:${minutes}:${seconds}.${milliseconds}`;
+}
+
+// Find matching subtitle for a video file
+function findMatchingSubtitle(videoPath, subtitleFiles) {
+    const videoBaseName = videoPath.replace(/\.[^/.]+$/, '').toLowerCase();
+
+    // First, try to find exact match (same base name)
+    for (const sub of subtitleFiles) {
+        const subBaseName = sub.path.replace(/\.[^/.]+$/, '').toLowerCase();
+        if (subBaseName === videoBaseName) {
+            return sub;
+        }
+    }
+
+    // Try to find partial match
+    for (const sub of subtitleFiles) {
+        const subBaseName = sub.path.replace(/\.[^/.]+$/, '').toLowerCase();
+        if (videoBaseName.includes(subBaseName) || subBaseName.includes(videoBaseName)) {
+            return sub;
+        }
+    }
+
+    return null;
+}
+
 // ============ Token 管理 ============
 
 function getToken() {
@@ -657,15 +802,26 @@ function stopProgressPolling() {
 // ============ 播放器 ============
 
 let currentTorrentIsOwner = false;
+let currentTorrentFiles = [];
+let currentSubtitleFiles = [];
+let currentSubtitleBlobUrl = null;
 
 async function openPlayer(infoHash, isOwner = false) {
     showLoading();
     currentTorrentIsOwner = isOwner;
 
+    // Clean up previous subtitle blob URL
+    if (currentSubtitleBlobUrl) {
+        URL.revokeObjectURL(currentSubtitleBlobUrl);
+        currentSubtitleBlobUrl = null;
+    }
+
     try {
         const data = await apiRequest(`${TORRENT_API}/detail/${infoHash}`);
 
         currentInfoHash = infoHash;
+        currentTorrentFiles = data.files;
+        currentSubtitleFiles = data.files.filter(f => isSubtitleFile(f.path));
         elements.playerTitle.textContent = data.name;
 
         // 渲染分享按钮（仅对自己的资源显示）
@@ -686,16 +842,40 @@ async function openPlayer(infoHash, isOwner = false) {
         if (videoFiles.length === 0) {
             elements.playerFiles.innerHTML = '<p>暂无可播放的视频文件</p>';
         } else {
+            // Build subtitle selector HTML
+            let subtitleSelectorHtml = '';
+            if (currentSubtitleFiles.length > 0) {
+                subtitleSelectorHtml = `
+                    <div class="subtitle-selector">
+                        <h4>📝 字幕</h4>
+                        <div class="subtitle-options">
+                            <div class="subtitle-option active" data-path="" onclick="selectSubtitle('')">
+                                <span>关闭字幕</span>
+                            </div>
+                            ${currentSubtitleFiles.map(sub => `
+                                <div class="subtitle-option" data-path="${sub.path}" onclick="selectSubtitle('${sub.path}')">
+                                    <span>${sub.path}</span>
+                                    <span class="subtitle-size">${sub.size_readable || formatSize(sub.size)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
             elements.playerFiles.innerHTML = `
+                ${subtitleSelectorHtml}
                 <h4>文件列表</h4>
                 ${data.files.map((file, index) => {
                 const isVideo = isVideoFile(file.path);
+                const isSubtitle = isSubtitleFile(file.path);
+                const icon = isVideo ? '🎬' : (isSubtitle ? '📝' : '📄');
                 return `
                         <div class="player-file-item ${!isVideo || !file.is_streamable ? 'disabled' : ''}" 
                              data-index="${index}" 
                              data-path="${file.path}"
                              data-streamable="${file.is_streamable}">
-                            <span>${file.path}</span>
+                            <span>${icon} ${file.path}</span>
                             <span>${file.size_readable || formatSize(file.size)}</span>
                         </div>
                     `;
@@ -746,11 +926,98 @@ async function togglePublicFromPlayer(infoHash, isPublic) {
     `;
 }
 
-function playFile(filePath) {
+async function playFile(filePath) {
     const videoUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+
+    // Clean up previous subtitle blob URL
+    if (currentSubtitleBlobUrl) {
+        URL.revokeObjectURL(currentSubtitleBlobUrl);
+        currentSubtitleBlobUrl = null;
+    }
+
+    // Remove any existing track elements
+    const existingTracks = elements.videoPlayer.querySelectorAll('track');
+    existingTracks.forEach(track => track.remove());
+
     elements.videoPlayer.src = videoUrl;
+
+    // Try to find and load matching subtitle automatically
+    const matchingSubtitle = findMatchingSubtitle(filePath, currentSubtitleFiles);
+    if (matchingSubtitle) {
+        await loadAndAttachSubtitle(matchingSubtitle.path);
+        // Update subtitle selector UI
+        updateSubtitleSelection(matchingSubtitle.path);
+    }
+
     elements.videoPlayer.play().catch(e => {
         console.log('Auto-play prevented:', e);
+    });
+}
+
+// Load and attach subtitle to video
+async function loadAndAttachSubtitle(subtitlePath) {
+    if (!subtitlePath) {
+        // Remove subtitle
+        const existingTracks = elements.videoPlayer.querySelectorAll('track');
+        existingTracks.forEach(track => track.remove());
+        if (currentSubtitleBlobUrl) {
+            URL.revokeObjectURL(currentSubtitleBlobUrl);
+            currentSubtitleBlobUrl = null;
+        }
+        return;
+    }
+
+    const subtitleUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(subtitlePath)}`;
+    const vttBlobUrl = await loadSubtitle(subtitleUrl, subtitlePath);
+
+    if (vttBlobUrl) {
+        // Remove any existing track elements
+        const existingTracks = elements.videoPlayer.querySelectorAll('track');
+        existingTracks.forEach(track => track.remove());
+
+        // Clean up old blob URL
+        if (currentSubtitleBlobUrl) {
+            URL.revokeObjectURL(currentSubtitleBlobUrl);
+        }
+        currentSubtitleBlobUrl = vttBlobUrl;
+
+        // Create and attach new track element
+        const track = document.createElement('track');
+        track.kind = 'subtitles';
+        track.label = subtitlePath.split('/').pop();
+        track.srclang = 'en';
+        track.src = vttBlobUrl;
+        track.default = true;
+
+        elements.videoPlayer.appendChild(track);
+
+        // Enable the track
+        setTimeout(() => {
+            if (elements.videoPlayer.textTracks.length > 0) {
+                elements.videoPlayer.textTracks[0].mode = 'showing';
+            }
+        }, 100);
+
+        showToast(`已加载字幕: ${subtitlePath.split('/').pop()}`, 'success');
+    }
+}
+
+// Select subtitle from UI
+function selectSubtitle(subtitlePath) {
+    updateSubtitleSelection(subtitlePath);
+    loadAndAttachSubtitle(subtitlePath);
+}
+
+// Update subtitle selector UI
+function updateSubtitleSelection(selectedPath) {
+    const subtitleOptions = document.querySelectorAll('.subtitle-option');
+    subtitleOptions.forEach(option => {
+        const optionPath = option.dataset.path;
+        if (optionPath === selectedPath) {
+            option.classList.add('active');
+        } else {
+            option.classList.remove('active');
+        }
     });
 }
 
@@ -871,3 +1138,4 @@ document.addEventListener('DOMContentLoaded', init);
 window.navigateTo = navigateTo;
 window.togglePublic = togglePublic;
 window.togglePublicFromPlayer = togglePublicFromPlayer;
+window.selectSubtitle = selectSubtitle;

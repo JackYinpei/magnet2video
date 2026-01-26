@@ -6,7 +6,6 @@ package controller
 import (
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -270,10 +269,11 @@ func getContentType(filePath string) string {
 		".zip":  "application/zip",
 		".rar":  "application/x-rar-compressed",
 		".7z":   "application/x-7z-compressed",
-		".txt":  "text/plain",
-		".srt":  "text/plain",
-		".ass":  "text/plain",
-		".ssa":  "text/plain",
+		".txt":  "text/plain; charset=utf-8",
+		".srt":  "text/plain; charset=utf-8",
+		".vtt":  "text/vtt; charset=utf-8",
+		".ass":  "text/plain; charset=utf-8",
+		".ssa":  "text/plain; charset=utf-8",
 	}
 
 	if ct, ok := contentTypes[ext]; ok {
