@@ -16,8 +16,8 @@ RUN go build -o server ./main.go
 FROM alpine:latest
 WORKDIR /app
 
-# Install tzdata for timezones
-RUN apk add --no-cache tzdata
+# Install tzdata for timezones and ffmpeg for video transcoding
+RUN apk add --no-cache tzdata ffmpeg
 
 COPY --from=builder /app/server .
 COPY configs ./configs

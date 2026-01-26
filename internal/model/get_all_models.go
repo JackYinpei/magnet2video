@@ -5,13 +5,15 @@ package model
 
 import (
 	"github.com/Done-0/gin-scaffold/internal/model/torrent"
+	"github.com/Done-0/gin-scaffold/internal/model/transcode"
 	"github.com/Done-0/gin-scaffold/internal/model/user"
 )
 
 // GetAllModels gets and registers all models for database migration
 func GetAllModels() []any {
 	return []any{
-		&user.User{},       // User model
-		&torrent.Torrent{}, // Torrent model
+		&user.User{},             // User model
+		&torrent.Torrent{},       // Torrent model
+		&transcode.TranscodeJob{}, // Transcode job model
 	}
 }

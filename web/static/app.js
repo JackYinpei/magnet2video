@@ -3,12 +3,18 @@ const API_BASE = '/api/v1';
 const TORRENT_API = '/api/v1/torrent';
 const AUTH_API = '/api/v1/auth';
 const USER_API = '/api/v1/user';
+const ADMIN_API = '/api/v1/admin';
 
 // 状态
 let currentInfoHash = null;
 let parsedTorrent = null;
 let progressInterval = null;
 let currentUser = null;
+
+// Admin pagination state
+let adminUsersPage = 1;
+let adminResourcesPage = 1;
+const adminPageSize = 10;
 
 // DOM 元素
 const elements = {
@@ -21,6 +27,7 @@ const elements = {
     pageDownloads: document.getElementById('page-downloads'),
     pagePlayer: document.getElementById('page-player'),
     pageProfile: document.getElementById('page-profile'),
+    pageAdmin: document.getElementById('page-admin'),
 
     // 导航
     navLinks: document.querySelectorAll('.nav-link'),
@@ -379,6 +386,16 @@ async function loadUserProfile() {
 }
 
 function updateNavUser() {
+    // Show/hide admin link based on role
+    const adminLink = document.querySelector('.nav-link.admin-only');
+    if (adminLink) {
+        if (currentUser && currentUser.role === 'admin') {
+            adminLink.classList.remove('hidden');
+        } else {
+            adminLink.classList.add('hidden');
+        }
+    }
+
     if (currentUser) {
         elements.navUser.innerHTML = `
             <div class="user-info" onclick="navigateTo('profile')">
@@ -397,11 +414,18 @@ function updateNavUser() {
 
 function navigateTo(pageName) {
     // 需要登录的页面
-    const protectedPages = ['library', 'add', 'downloads', 'profile'];
+    const protectedPages = ['library', 'add', 'downloads', 'profile', 'admin'];
 
     if (protectedPages.includes(pageName) && !currentUser) {
         showToast('请先登录', 'error');
         navigateTo('login');
+        return;
+    }
+
+    // Admin page requires admin role
+    if (pageName === 'admin' && currentUser?.role !== 'admin') {
+        showToast('需要管理员权限', 'error');
+        navigateTo('library');
         return;
     }
 
@@ -438,6 +462,9 @@ function navigateTo(pageName) {
             break;
         case 'profile':
             loadProfile();
+            break;
+        case 'admin':
+            loadAdminPage();
             break;
         default:
             stopProgressPolling();
@@ -676,7 +703,7 @@ function renderDownloads(torrents) {
                     ` : torrent.status === 4 ? `
                         <button class="btn btn-sm resume-btn" data-infohash="${torrent.info_hash}">继续</button>
                     ` : ''}
-                    <button class="btn btn-sm ${torrent.is_public ? 'btn-success' : ''}" 
+                    <button class="btn btn-sm ${torrent.is_public ? 'btn-success' : ''}"
                             onclick="togglePublic('${torrent.info_hash}', ${!torrent.is_public})">
                         ${torrent.is_public ? '✓ 公开' : '设为公开'}
                     </button>
@@ -684,7 +711,7 @@ function renderDownloads(torrents) {
                 </div>
             </div>
             <div class="download-progress">
-                <div class="download-progress-bar ${torrent.status === 2 ? 'completed' : ''}" 
+                <div class="download-progress-bar ${torrent.status === 2 ? 'completed' : ''}"
                      style="width: ${torrent.progress}%"></div>
             </div>
             <div class="download-stats">
@@ -693,6 +720,7 @@ function renderDownloads(torrents) {
                 <div class="download-stat">速度: <span>${torrent.download_speed_readable || '0 B/s'}</span></div>
                 <div class="download-stat">状态: <span>${getStatusText(torrent.status)}</span></div>
             </div>
+            ${renderTranscodeStatus(torrent)}
         </div>
     `).join('');
 
@@ -797,6 +825,42 @@ function stopProgressPolling() {
         clearInterval(progressInterval);
         progressInterval = null;
     }
+}
+
+// Render transcode status for a torrent
+function renderTranscodeStatus(torrent) {
+    // Only show if transcode_status exists and is not 0 (no transcode needed)
+    if (!torrent.transcode_status || torrent.transcode_status === 0) {
+        return '';
+    }
+
+    const statusText = getTranscodeText(torrent.transcode_status);
+    const statusClass = getTranscodeClass(torrent.transcode_status);
+    const progress = torrent.transcode_progress || 0;
+    const transcoded = torrent.transcoded_count || 0;
+    const total = torrent.total_transcode || 0;
+
+    let progressHtml = '';
+    if (torrent.transcode_status === 2) { // Processing
+        progressHtml = `
+            <div class="transcode-progress">
+                <div class="transcode-progress-bar">
+                    <div class="transcode-progress-fill" style="width: ${progress}%"></div>
+                </div>
+                <span class="transcode-progress-text">${progress}%</span>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="download-transcode">
+            <div class="download-transcode-label">
+                转码状态: <span class="transcode-badge ${statusClass}">${statusText}</span>
+                ${total > 0 ? `(${transcoded}/${total} 文件)` : ''}
+            </div>
+            ${progressHtml}
+        </div>
+    `;
 }
 
 // ============ 播放器 ============
@@ -1031,6 +1095,358 @@ function loadProfile() {
     elements.profileAvatar.textContent = currentUser.nickname?.charAt(0).toUpperCase() || '👤';
 }
 
+// ============ 管理员功能 ============
+
+function loadAdminPage() {
+    // Initialize admin tabs
+    initAdminTabs();
+    // Load first tab by default
+    loadAdminUsers();
+    loadAdminStats();
+}
+
+function initAdminTabs() {
+    const tabs = document.querySelectorAll('.admin-tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            // Update active tab
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+
+            // Update active content
+            document.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
+            const targetContent = document.getElementById(`admin-tab-${tab.dataset.tab}`);
+            if (targetContent) {
+                targetContent.classList.add('active');
+            }
+
+            // Load content
+            switch (tab.dataset.tab) {
+                case 'users':
+                    loadAdminUsers();
+                    break;
+                case 'resources':
+                    loadAdminResources();
+                    break;
+                case 'stats':
+                    loadAdminStats();
+                    break;
+            }
+        });
+    });
+
+    // Search button events
+    const searchUsersBtn = document.getElementById('admin-search-users-btn');
+    if (searchUsersBtn) {
+        searchUsersBtn.addEventListener('click', () => {
+            adminUsersPage = 1;
+            loadAdminUsers();
+        });
+    }
+
+    const searchResourcesBtn = document.getElementById('admin-search-resources-btn');
+    if (searchResourcesBtn) {
+        searchResourcesBtn.addEventListener('click', () => {
+            adminResourcesPage = 1;
+            loadAdminResources();
+        });
+    }
+
+    // Refresh stats button
+    const refreshStatsBtn = document.getElementById('refresh-stats-btn');
+    if (refreshStatsBtn) {
+        refreshStatsBtn.addEventListener('click', loadAdminStats);
+    }
+}
+
+async function loadAdminUsers() {
+    const searchInput = document.getElementById('admin-user-search');
+    const roleFilter = document.getElementById('admin-user-role-filter');
+    const tbody = document.getElementById('admin-users-tbody');
+
+    const params = new URLSearchParams({
+        page: adminUsersPage,
+        page_size: adminPageSize
+    });
+
+    if (searchInput && searchInput.value) {
+        params.append('search', searchInput.value);
+    }
+    if (roleFilter && roleFilter.value) {
+        params.append('role', roleFilter.value);
+    }
+
+    try {
+        const data = await apiRequest(`${ADMIN_API}/users?${params}`);
+        renderAdminUsers(data.users || [], data.total || 0);
+    } catch (error) {
+        console.error('加载用户列表失败:', error);
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center">加载失败</td></tr>';
+        }
+    }
+}
+
+function renderAdminUsers(users, total) {
+    const tbody = document.getElementById('admin-users-tbody');
+    if (!tbody) return;
+
+    if (users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center">暂无用户</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = users.map(user => `
+        <tr>
+            <td>${user.id}</td>
+            <td>${user.email}</td>
+            <td>${user.nickname}</td>
+            <td>
+                <span class="role-badge ${user.is_super_admin ? 'super' : user.role}">${
+                    user.is_super_admin ? '超级管理员' : (user.role === 'admin' ? '管理员' : '普通用户')
+                }</span>
+            </td>
+            <td>${user.torrent_count || 0}</td>
+            <td>${formatDate(user.created_at)}</td>
+            <td class="actions">
+                ${!user.is_super_admin ? `
+                    <button class="btn btn-sm" onclick="toggleUserRole(${user.id}, '${user.role}')">
+                        ${user.role === 'admin' ? '降级' : '升级'}
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id})">删除</button>
+                ` : '<span style="color: var(--text-secondary)">-</span>'}
+            </td>
+        </tr>
+    `).join('');
+
+    // Render pagination
+    renderAdminPagination('admin-users-pagination', total, adminUsersPage, (page) => {
+        adminUsersPage = page;
+        loadAdminUsers();
+    });
+}
+
+async function loadAdminResources() {
+    const searchInput = document.getElementById('admin-resource-search');
+    const statusFilter = document.getElementById('admin-resource-status-filter');
+    const tbody = document.getElementById('admin-resources-tbody');
+
+    const params = new URLSearchParams({
+        page: adminResourcesPage,
+        page_size: adminPageSize
+    });
+
+    if (searchInput && searchInput.value) {
+        params.append('search', searchInput.value);
+    }
+    if (statusFilter && statusFilter.value) {
+        params.append('status', statusFilter.value);
+    }
+
+    try {
+        const data = await apiRequest(`${ADMIN_API}/torrents?${params}`);
+        renderAdminResources(data.torrents || [], data.total || 0);
+    } catch (error) {
+        console.error('加载资源列表失败:', error);
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center">加载失败</td></tr>';
+        }
+    }
+}
+
+function renderAdminResources(torrents, total) {
+    const tbody = document.getElementById('admin-resources-tbody');
+    if (!tbody) return;
+
+    if (torrents.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center">暂无资源</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = torrents.map(torrent => `
+        <tr>
+            <td title="${torrent.name}">${truncate(torrent.name, 30)}</td>
+            <td>${formatSize(torrent.total_size)}</td>
+            <td><span class="status-badge ${getStatusClass(torrent.status)}">${getStatusText(torrent.status)}</span></td>
+            <td>${torrent.progress?.toFixed(1) || 0}%</td>
+            <td><span class="transcode-badge ${getTranscodeClass(torrent.transcode_status)}">${getTranscodeText(torrent.transcode_status)}</span></td>
+            <td>${torrent.creator_nickname || '-'}</td>
+            <td>${formatDate(torrent.created_at)}</td>
+            <td class="actions">
+                <button class="btn btn-sm btn-danger" onclick="deleteAdminTorrent('${torrent.info_hash}')">删除</button>
+            </td>
+        </tr>
+    `).join('');
+
+    // Render pagination
+    renderAdminPagination('admin-resources-pagination', total, adminResourcesPage, (page) => {
+        adminResourcesPage = page;
+        loadAdminResources();
+    });
+}
+
+async function loadAdminStats() {
+    try {
+        const data = await apiRequest(`${ADMIN_API}/stats`);
+
+        document.getElementById('stat-total-users').textContent = data.total_users || 0;
+        document.getElementById('stat-total-torrents').textContent = data.total_torrents || 0;
+        document.getElementById('stat-total-storage').textContent = formatSize(data.total_storage || 0);
+        document.getElementById('stat-disk-usage').textContent = formatSize(data.disk_usage || 0);
+        document.getElementById('stat-active-downloads').textContent = data.active_downloads || 0;
+        document.getElementById('stat-completed-downloads').textContent = data.completed_downloads || 0;
+        document.getElementById('stat-transcoding-jobs').textContent = data.transcoding_jobs || 0;
+    } catch (error) {
+        console.error('加载统计信息失败:', error);
+    }
+}
+
+function renderAdminPagination(containerId, total, currentPage, onPageChange) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const totalPages = Math.ceil(total / adminPageSize);
+    if (totalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = '';
+
+    // Previous button
+    html += `<button ${currentPage === 1 ? 'disabled' : ''} onclick="window.adminPageChange('${containerId}', ${currentPage - 1})">上一页</button>`;
+
+    // Page numbers
+    for (let i = 1; i <= totalPages; i++) {
+        if (i === 1 || i === totalPages || (i >= currentPage - 2 && i <= currentPage + 2)) {
+            html += `<button class="${i === currentPage ? 'active' : ''}" onclick="window.adminPageChange('${containerId}', ${i})">${i}</button>`;
+        } else if (i === currentPage - 3 || i === currentPage + 3) {
+            html += '<button disabled>...</button>';
+        }
+    }
+
+    // Next button
+    html += `<button ${currentPage === totalPages ? 'disabled' : ''} onclick="window.adminPageChange('${containerId}', ${currentPage + 1})">下一页</button>`;
+
+    container.innerHTML = html;
+
+    // Store callback for global access
+    window.adminPaginationCallbacks = window.adminPaginationCallbacks || {};
+    window.adminPaginationCallbacks[containerId] = onPageChange;
+}
+
+// Global pagination handler
+window.adminPageChange = function(containerId, page) {
+    if (window.adminPaginationCallbacks && window.adminPaginationCallbacks[containerId]) {
+        window.adminPaginationCallbacks[containerId](page);
+    }
+};
+
+async function toggleUserRole(userId, currentRole) {
+    const newRole = currentRole === 'admin' ? 'user' : 'admin';
+    const action = newRole === 'admin' ? '升级为管理员' : '降级为普通用户';
+
+    if (!confirm(`确定要将此用户${action}吗？`)) {
+        return;
+    }
+
+    try {
+        await apiRequest(`${ADMIN_API}/users/${userId}/role`, {
+            method: 'PUT',
+            body: JSON.stringify({ role: newRole })
+        });
+        showToast(`已${action}`, 'success');
+        loadAdminUsers();
+    } catch (error) {
+        showToast(error.message || '操作失败', 'error');
+    }
+}
+
+async function deleteUser(userId) {
+    if (!confirm('确定要删除此用户吗？该用户的所有资源也将被删除！')) {
+        return;
+    }
+
+    try {
+        await apiRequest(`${ADMIN_API}/users/${userId}`, {
+            method: 'DELETE'
+        });
+        showToast('用户已删除', 'success');
+        loadAdminUsers();
+        loadAdminStats();
+    } catch (error) {
+        showToast(error.message || '删除失败', 'error');
+    }
+}
+
+async function deleteAdminTorrent(infoHash) {
+    if (!confirm('确定要删除此资源吗？文件也将被删除！')) {
+        return;
+    }
+
+    try {
+        await apiRequest(`${ADMIN_API}/torrents/${infoHash}`, {
+            method: 'DELETE'
+        });
+        showToast('资源已删除', 'success');
+        loadAdminResources();
+        loadAdminStats();
+    } catch (error) {
+        showToast(error.message || '删除失败', 'error');
+    }
+}
+
+// Helper functions for admin
+function formatDate(dateStr) {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function truncate(str, maxLen) {
+    if (!str) return '';
+    return str.length > maxLen ? str.substring(0, maxLen) + '...' : str;
+}
+
+function getStatusClass(status) {
+    const classMap = {
+        0: 'pending',
+        1: 'downloading',
+        2: 'completed',
+        3: 'failed',
+        4: 'paused'
+    };
+    return classMap[status] || 'pending';
+}
+
+function getTranscodeText(status) {
+    const textMap = {
+        0: '无需转码',
+        1: '待转码',
+        2: '转码中',
+        3: '已完成',
+        4: '失败'
+    };
+    return textMap[status] || '未知';
+}
+
+function getTranscodeClass(status) {
+    const classMap = {
+        0: 'none',
+        1: 'pending',
+        2: 'processing',
+        3: 'completed',
+        4: 'failed'
+    };
+    return classMap[status] || 'none';
+}
+
 // ============ 事件监听初始化 ============
 
 function initEventListeners() {
@@ -1139,3 +1555,8 @@ window.navigateTo = navigateTo;
 window.togglePublic = togglePublic;
 window.togglePublicFromPlayer = togglePublicFromPlayer;
 window.selectSubtitle = selectSubtitle;
+
+// Admin functions
+window.toggleUserRole = toggleUserRole;
+window.deleteUser = deleteUser;
+window.deleteAdminTorrent = deleteAdminTorrent;

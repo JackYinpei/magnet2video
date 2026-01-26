@@ -14,9 +14,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/Done-0/gin-scaffold/configs"
+	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/middleware"
+	userModel "github.com/Done-0/gin-scaffold/internal/model/user"
+	"github.com/Done-0/gin-scaffold/internal/queue"
+	"github.com/Done-0/gin-scaffold/internal/transcode/handler"
+	"github.com/Done-0/gin-scaffold/internal/transcode/types"
 	"github.com/Done-0/gin-scaffold/pkg/router"
 	"github.com/Done-0/gin-scaffold/pkg/wire"
 	"github.com/Done-0/gin-scaffold/web"
@@ -49,6 +56,11 @@ func Start() {
 	}
 	defer container.DatabaseManager.Close()
 
+	// Create super admin if configured
+	if err := createSuperAdmin(cfgs, container.DatabaseManager); err != nil {
+		log.Printf("Warning: Failed to create super admin: %v", err)
+	}
+
 	if err := container.RedisManager.Initialize(); err != nil {
 		log.Fatalf("Failed to initialize Redis: %v", err)
 	}
@@ -57,9 +69,31 @@ func Start() {
 	// Close torrent manager on shutdown
 	defer container.TorrentManager.Close()
 
-	// MQ consumers
+	// Close queue producer on shutdown
+	defer container.QueueProducer.Close()
+
+	// Start transcode Kafka consumer
+	var transcodeConsumer queue.Consumer
 	go func() {
-		// TODO: Add specific consumer startup logic here
+		transcodeHandler := handler.NewTranscodeHandler(
+			cfgs,
+			container.LoggerManager,
+			container.DatabaseManager,
+		)
+
+		var err error
+		transcodeConsumer, err = queue.NewConsumer(cfgs, transcodeHandler)
+		if err != nil {
+			log.Printf("Warning: Failed to create transcode consumer: %v", err)
+			return
+		}
+
+		if err := transcodeConsumer.Subscribe([]string{types.TopicTranscodeJobs}); err != nil {
+			log.Printf("Warning: Failed to subscribe to transcode topic: %v", err)
+			return
+		}
+
+		log.Println("Transcode Kafka consumer started")
 	}()
 
 	// Set Gin mode based on environment
@@ -102,6 +136,12 @@ func Start() {
 	<-quit
 	log.Println("Shutting down server...")
 
+	// Close transcode consumer
+	if transcodeConsumer != nil {
+		transcodeConsumer.Close()
+		log.Println("Transcode consumer closed")
+	}
+
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -111,4 +151,63 @@ func Start() {
 	}
 
 	log.Println("Server exited")
+}
+
+// createSuperAdmin creates or updates the super admin account based on configuration
+func createSuperAdmin(config *configs.Config, dbManager db.DatabaseManager) error {
+	email := config.AppConfig.User.SuperAdminEmail
+	password := config.AppConfig.User.SuperAdminPassword
+	nickname := config.AppConfig.User.SuperAdminNickname
+
+	// Skip if super admin is not configured
+	if email == "" || password == "" {
+		return nil
+	}
+
+	if nickname == "" {
+		nickname = "Super Admin"
+	}
+
+	var existingAdmin userModel.User
+	result := dbManager.DB().Where("email = ?", email).First(&existingAdmin)
+
+	if result.Error == gorm.ErrRecordNotFound {
+		// Create new super admin
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("failed to hash password: %w", err)
+		}
+
+		admin := &userModel.User{
+			Email:        email,
+			Password:     string(hashedPassword),
+			Nickname:     nickname,
+			Role:         "admin",
+			IsSuperAdmin: true,
+		}
+
+		if err := dbManager.DB().Create(admin).Error; err != nil {
+			return fmt.Errorf("failed to create super admin: %w", err)
+		}
+
+		log.Printf("Super admin created: %s", email)
+		return nil
+	}
+
+	if result.Error != nil {
+		return fmt.Errorf("failed to check existing admin: %w", result.Error)
+	}
+
+	// Update existing user to be super admin if not already
+	if !existingAdmin.IsSuperAdmin || existingAdmin.Role != "admin" {
+		if err := dbManager.DB().Model(&existingAdmin).Updates(map[string]any{
+			"role":          "admin",
+			"is_super_admin": true,
+		}).Error; err != nil {
+			return fmt.Errorf("failed to update super admin: %w", err)
+		}
+		log.Printf("User %s upgraded to super admin", email)
+	}
+
+	return nil
 }

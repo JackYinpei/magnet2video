@@ -141,15 +141,28 @@ type TorrentConfig struct {
 	ListenPort        int    `mapstructure:"LISTEN_PORT"`         // BT listen port for P2P connections
 }
 
+// TranscodeConfig video transcoding configuration
+type TranscodeConfig struct {
+	FFmpegPath      string   `mapstructure:"FFMPEG_PATH"`       // FFmpeg executable path
+	FFprobePath     string   `mapstructure:"FFPROBE_PATH"`      // FFprobe executable path
+	WorkerCount     int      `mapstructure:"WORKER_COUNT"`      // Number of concurrent transcode workers
+	SupportedInputs []string `mapstructure:"SUPPORTED_INPUTS"`  // Input formats that need transcoding
+	DefaultCodec    string   `mapstructure:"DEFAULT_CODEC"`     // Default output codec (h264)
+	DefaultPreset   string   `mapstructure:"DEFAULT_PRESET"`    // Encoding preset (medium)
+	DefaultCRF      int      `mapstructure:"DEFAULT_CRF"`       // CRF value for quality (23)
+	DefaultAudioCodec string `mapstructure:"DEFAULT_AUDIO_CODEC"` // Default audio codec (aac)
+}
+
 // Config main configuration structure
 type Config struct {
-	AppConfig     AppConfig      `mapstructure:"APP"`      // Application configuration
-	DBConfig      DatabaseConfig `mapstructure:"DATABASE"` // Database configuration
-	LogConfig     LogConfig      `mapstructure:"LOG"`      // Logging configuration
-	RedisConfig   RedisConfig    `mapstructure:"REDIS"`    // Redis configuration
-	KafkaConfig   KafkaConfig    `mapstructure:"KAFKA"`    // Kafka configuration
-	AI            AIConfig       `mapstructure:"AI"`       // AI service configuration
-	TorrentConfig TorrentConfig  `mapstructure:"TORRENT"` // Torrent client configuration
+	AppConfig       AppConfig       `mapstructure:"APP"`       // Application configuration
+	DBConfig        DatabaseConfig  `mapstructure:"DATABASE"`  // Database configuration
+	LogConfig       LogConfig       `mapstructure:"LOG"`       // Logging configuration
+	RedisConfig     RedisConfig     `mapstructure:"REDIS"`     // Redis configuration
+	KafkaConfig     KafkaConfig     `mapstructure:"KAFKA"`     // Kafka configuration
+	AI              AIConfig        `mapstructure:"AI"`        // AI service configuration
+	TorrentConfig   TorrentConfig   `mapstructure:"TORRENT"`   // Torrent client configuration
+	TranscodeConfig TranscodeConfig `mapstructure:"TRANSCODE"` // Video transcoding configuration
 }
 
 // Configuration file path constants
