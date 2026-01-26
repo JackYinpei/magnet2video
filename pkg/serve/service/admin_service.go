@@ -28,4 +28,6 @@ type AdminService interface {
 	DeleteTorrent(c *gin.Context, infoHash string) (*vo.DeleteTorrentResponse, error)
 	// GetStats returns system statistics
 	GetStats(c *gin.Context) (*vo.AdminStatsResponse, error)
+	// ResetTranscode resets transcode status and deletes transcoded file
+	ResetTranscode(c *gin.Context, infoHash string) (*vo.ResetTranscodeResponse, error)
 }

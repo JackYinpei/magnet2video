@@ -382,6 +382,71 @@ func (as *AdminServiceImpl) DeleteTorrent(c *gin.Context, infoHash string) (*vo.
 	}, nil
 }
 
+// ResetTranscode resets transcode status and deletes transcoded files
+func (as *AdminServiceImpl) ResetTranscode(c *gin.Context, infoHash string) (*vo.ResetTranscodeResponse, error) {
+	var torrentRecord torrentModel.Torrent
+	if err := as.dbManager.DB().Where("info_hash = ?", infoHash).First(&torrentRecord).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("torrent not found")
+		}
+		as.loggerManager.Logger().Errorf("failed to get torrent: %v", err)
+		return nil, err
+	}
+
+	// Count and delete transcoded files
+	filesDeleted := 0
+	downloadDir := as.torrentManager.Client().GetDownloadDir()
+
+	for i := range torrentRecord.Files {
+		if torrentRecord.Files[i].TranscodedPath != "" {
+			// Build full path to transcoded file
+			transcodedPath := torrentRecord.Files[i].TranscodedPath
+			fullPath := filepath.Join(downloadDir, transcodedPath)
+
+			// Try to delete the file
+			if err := os.Remove(fullPath); err != nil {
+				if !os.IsNotExist(err) {
+					as.loggerManager.Logger().Warnf("failed to delete transcoded file %s: %v", fullPath, err)
+				}
+			} else {
+				filesDeleted++
+				as.loggerManager.Logger().Infof("Deleted transcoded file: %s", fullPath)
+			}
+
+			// Reset file-level transcode status
+			torrentRecord.Files[i].TranscodeStatus = 0
+			torrentRecord.Files[i].TranscodedPath = ""
+			torrentRecord.Files[i].TranscodeError = ""
+		}
+	}
+
+	// Reset torrent-level transcode status
+	updates := map[string]any{
+		"transcode_status":   0,
+		"transcode_progress": 0,
+		"transcoded_count":   0,
+		"total_transcode":    0,
+		"files":              torrentRecord.Files,
+	}
+
+	if err := as.dbManager.DB().Model(&torrentRecord).Updates(updates).Error; err != nil {
+		as.loggerManager.Logger().Errorf("failed to reset transcode status: %v", err)
+		return nil, err
+	}
+
+	// Delete related transcode jobs
+	as.dbManager.DB().Where("info_hash = ?", infoHash).Delete(&transcodeModel.TranscodeJob{})
+
+	currentUserID := auth.GetUserID(c)
+	as.loggerManager.Logger().Infof("Transcode reset by admin: infoHash=%s, filesDeleted=%d, resetBy=%d", infoHash, filesDeleted, currentUserID)
+
+	return &vo.ResetTranscodeResponse{
+		InfoHash:     infoHash,
+		FilesDeleted: filesDeleted,
+		Message:      fmt.Sprintf("Transcode reset successfully, %d files deleted", filesDeleted),
+	}, nil
+}
+
 // GetStats returns system statistics
 func (as *AdminServiceImpl) GetStats(c *gin.Context) (*vo.AdminStatsResponse, error) {
 	var totalUsers int64

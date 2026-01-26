@@ -184,3 +184,21 @@ func (ac *AdminController) GetStats(c *gin.Context) {
 
 	c.JSON(http.StatusOK, vo.Success(c, response))
 }
+
+// ResetTranscode handles resetting transcode status and deleting transcoded files
+// @Router /api/v1/admin/torrents/:info_hash/transcode [delete]
+func (ac *AdminController) ResetTranscode(c *gin.Context) {
+	infoHash := c.Param("info_hash")
+	if infoHash == "" {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "missing info_hash"))))
+		return
+	}
+
+	response, err := ac.adminService.ResetTranscode(c, infoHash)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrTorrentNotFound, errorx.KV("info_hash", infoHash))))
+		return
+	}
+
+	c.JSON(http.StatusOK, vo.Success(c, response))
+}

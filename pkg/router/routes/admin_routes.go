@@ -27,6 +27,7 @@ func RegisterAdminRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 		// Torrent management
 		adminGroup.GET("/torrents", container.AdminController.ListAllTorrents)
 		adminGroup.DELETE("/torrents/:info_hash", container.AdminController.DeleteTorrent)
+		adminGroup.DELETE("/torrents/:info_hash/transcode", container.AdminController.ResetTranscode)
 
 		// System statistics
 		adminGroup.GET("/stats", container.AdminController.GetStats)

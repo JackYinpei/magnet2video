@@ -89,3 +89,10 @@ type AdminStatsResponse struct {
 	CompletedDownloads int64 `json:"completed_downloads"`  // Completed downloads count
 	ActiveDownloads    int64 `json:"active_downloads"`     // Active downloads count
 }
+
+// ResetTranscodeResponse response for resetting transcode
+type ResetTranscodeResponse struct {
+	InfoHash     string `json:"info_hash"`     // Torrent info hash
+	FilesDeleted int    `json:"files_deleted"` // Number of transcoded files deleted
+	Message      string `json:"message"`       // Status message
+}

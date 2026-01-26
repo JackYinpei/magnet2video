@@ -180,7 +180,10 @@ func (f *FFmpeg) Remux(ctx context.Context, inputPath, outputPath string, callba
 
 	args := []string{
 		"-i", inputPath,
-		"-c", "copy", // Copy streams without re-encoding
+		"-map", "0",             // Copy ALL streams (video, audio, subtitles)
+		"-c:v", "copy",          // Copy video without re-encoding
+		"-c:a", "aac",           // Convert audio to AAC for browser compatibility
+		"-b:a", "192k",          // Audio bitrate
 		"-movflags", "+faststart", // Enable fast start for web playback
 		"-y", // Overwrite output
 		"-progress", "pipe:1", // Output progress to stdout
