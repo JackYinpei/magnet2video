@@ -658,6 +658,73 @@ h2 {
     cursor: not-allowed;
 }
 
+/* 字幕选择器 */
+.subtitle-selector {
+    background-color: var(--bg-tertiary);
+    border-radius: var(--radius);
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid var(--border);
+}
+
+.subtitle-selector h4 {
+    margin-bottom: 0.75rem;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+}
+
+.subtitle-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.subtitle-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.625rem 0.875rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.2s;
+    background-color: var(--bg-secondary);
+    border: 1px solid transparent;
+    font-size: 0.875rem;
+}
+
+.subtitle-option:hover {
+    background-color: var(--bg-primary);
+    border-color: var(--accent);
+}
+
+.subtitle-option.active {
+    background: var(--gradient-accent);
+    border-color: transparent;
+    color: white;
+}
+
+.subtitle-option.active .subtitle-size {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.subtitle-size {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    flex-shrink: 0;
+    margin-left: 1rem;
+}
+
+/* Video text tracks styling */
+video::cue {
+    background-color: rgba(0, 0, 0, 0.75);
+    color: white;
+    font-size: 1.1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    line-height: 1.4;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+}
+
 /* 个人资料页面 */
 .profile-container {
     max-width: 500px;
