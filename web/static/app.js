@@ -1315,6 +1315,7 @@ function renderAdminResources(torrents, total) {
             <td>${torrent.creator_nickname || '-'}</td>
             <td>${formatDate(torrent.created_at)}</td>
             <td class="actions">
+                ${torrent.transcode_status === 3 ? `<button class="btn btn-sm btn-warning" onclick="resetTranscode('${torrent.info_hash}')">重置转码</button>` : ''}
                 <button class="btn btn-sm btn-danger" onclick="deleteAdminTorrent('${torrent.info_hash}')">删除</button>
             </td>
         </tr>
@@ -1441,6 +1442,23 @@ async function deleteAdminTorrent(infoHash) {
         loadAdminStats();
     } catch (error) {
         showToast(error.message || '删除失败', 'error');
+    }
+}
+
+async function resetTranscode(infoHash) {
+    if (!confirm('确定要重置此资源的转码状态吗？转码后的文件将被删除，系统会自动重新检测并转码。')) {
+        return;
+    }
+
+    try {
+        const data = await apiRequest(`${ADMIN_API}/torrents/${infoHash}/transcode`, {
+            method: 'DELETE'
+        });
+        showToast(data.message || '转码已重置', 'success');
+        loadAdminResources();
+        loadAdminStats();
+    } catch (error) {
+        showToast(error.message || '重置失败', 'error');
     }
 }
 
@@ -1626,3 +1644,4 @@ window.selectSubtitle = selectSubtitle;
 window.toggleUserRole = toggleUserRole;
 window.deleteUser = deleteUser;
 window.deleteAdminTorrent = deleteAdminTorrent;
+window.resetTranscode = resetTranscode;
