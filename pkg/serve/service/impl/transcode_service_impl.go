@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -93,11 +94,23 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 
 		// Check if file needs transcoding
 		if ffmpeg.NeedsTranscoding(file.Path) {
+			// Get full path - file.Path might not include torrent directory
+			// Try both: with and without torrent name directory
+			inputPath := filepath.Join(downloadDir, file.Path)
+
+			// Check if file exists at direct path
+			if _, err := os.Stat(inputPath); os.IsNotExist(err) {
+				// Try with torrent name as directory prefix
+				inputPath = filepath.Join(downloadDir, torrentRecord.Name, filepath.Base(file.Path))
+				if _, err := os.Stat(inputPath); os.IsNotExist(err) {
+					ts.loggerManager.Logger().Warnf("file not found, skipping transcode check: %s", file.Path)
+					continue
+				}
+			}
+
 			needsTranscode = true
 			totalTranscode++
 
-			// Get full path
-			inputPath := filepath.Join(downloadDir, file.Path)
 			outputPath := ffmpeg.GenerateOutputPath(inputPath)
 
 			// Probe file to determine transcode type
