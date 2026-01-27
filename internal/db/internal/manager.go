@@ -15,8 +15,7 @@ import (
 // Database dialect constants
 const (
 	DialectPostgres = "postgres" // PostgreSQL database
-	DialectSQLite   = "sqlite"   // SQLite database
-	DialectMySQL    = "mysql"    // MySQL database
+	DialectMySQL    = "mysql"    // MySQL database (default)
 )
 
 // Manager represents a database manager with dependency injection
@@ -40,7 +39,7 @@ func (m *Manager) DB() *gorm.DB {
 // Initialize sets up the database connection and performs migrations
 func (m *Manager) Initialize() error {
 	if err := m.setupDatabase(); err != nil {
-		return fmt.Errorf("failed to setup database: %w", err)
+		panic(fmt.Errorf("failed to setup database: %w", err))
 	}
 
 	if err := m.migrate(); err != nil {
