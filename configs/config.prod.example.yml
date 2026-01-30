@@ -53,11 +53,15 @@ LOG:
   LOG_LEVEL: "INFO"
 
 # ===========================================
-# Kafka 消息队列相关
+# 消息队列相关
 # ===========================================
-KAFKA:
-  BROKERS: ["kafka:9092"] # Kafka 集群地址 (Docker 服务名)
-  CONSUMER_GROUP: "trading-robot-prod" # 消费者组名称
+QUEUE:
+  TYPE: "rabbitmq"                       # 生产环境使用 RabbitMQ
+  RABBITMQ:
+    URL: "amqp://guest:guest@rabbitmq:5672/"
+    EXCHANGE: "transcode"
+    EXCHANGE_TYPE: "direct"
+    PREFETCH_COUNT: 1
 
 # ===========================================
 # AI 服务相关 (API Keys 在 .env 中配置)

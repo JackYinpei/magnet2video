@@ -170,7 +170,7 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 			}
 
 			msgBytes, _ := json.Marshal(msg)
-			if _, _, err := ts.queueProducer.Send(context.Background(), types.TopicTranscodeJobs, nil, msgBytes); err != nil {
+			if err := ts.queueProducer.Send(context.Background(), types.TopicTranscodeJobs, nil, msgBytes); err != nil {
 				ts.loggerManager.Logger().Errorf("failed to send transcode message: %v", err)
 				// Update job status to failed
 				ts.dbManager.DB().Model(&transcodeModel.TranscodeJob{}).Where("id = ?", job.ID).
@@ -324,7 +324,7 @@ func (ts *TranscodeServiceImpl) RetryTranscode(c *gin.Context, req *dto.RetryTra
 	}
 
 	msgBytes, _ := json.Marshal(msg)
-	if _, _, err := ts.queueProducer.Send(context.Background(), types.TopicTranscodeJobs, nil, msgBytes); err != nil {
+	if err := ts.queueProducer.Send(context.Background(), types.TopicTranscodeJobs, nil, msgBytes); err != nil {
 		ts.loggerManager.Logger().Errorf("failed to send transcode message: %v", err)
 		return nil, fmt.Errorf("failed to queue transcode job: %w", err)
 	}

@@ -1,4 +1,4 @@
-// Package handler provides Kafka message handler for transcoding jobs
+// Package handler provides message handler for transcoding jobs
 // Author: Done-0
 // Created: 2026-01-26
 package handler
@@ -10,13 +10,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/IBM/sarama"
-
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/logger"
 	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
 	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
+	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/transcode/ffmpeg"
 	"github.com/Done-0/gin-scaffold/internal/transcode/types"
 )
@@ -47,7 +46,7 @@ func NewTranscodeHandler(
 }
 
 // Handle processes a transcode job message
-func (h *TranscodeHandler) Handle(ctx context.Context, msg *sarama.ConsumerMessage) error {
+func (h *TranscodeHandler) Handle(ctx context.Context, msg *queue.Message) error {
 	var transcodeMsg types.TranscodeMessage
 	if err := json.Unmarshal(msg.Value, &transcodeMsg); err != nil {
 		h.loggerManager.Logger().Errorf("failed to unmarshal transcode message: %v", err)
@@ -68,7 +67,7 @@ func (h *TranscodeHandler) Handle(ctx context.Context, msg *sarama.ConsumerMessa
 	if _, err := os.Stat(transcodeMsg.InputPath); os.IsNotExist(err) {
 		errMsg := fmt.Sprintf("input file not found: %s", transcodeMsg.InputPath)
 		h.handleJobFailure(transcodeMsg, errMsg)
-		return fmt.Errorf(errMsg)
+		return fmt.Errorf("input file not found: %s", transcodeMsg.InputPath)
 	}
 
 	// Progress callback to update database

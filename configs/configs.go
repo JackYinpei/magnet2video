@@ -83,10 +83,18 @@ type RedisConfig struct {
 	WriteTimeout int `mapstructure:"WRITE_TIMEOUT"`  // Write timeout in seconds
 }
 
-// KafkaConfig Kafka configuration
-type KafkaConfig struct {
-	Brokers       []string `mapstructure:"BROKERS"`        // Kafka broker addresses
-	ConsumerGroup string   `mapstructure:"CONSUMER_GROUP"` // Consumer group name
+// QueueConfig message queue configuration
+type QueueConfig struct {
+	Type     string         `mapstructure:"TYPE"`     // Queue type: "channel" or "rabbitmq"
+	RabbitMQ RabbitMQConfig `mapstructure:"RABBITMQ"` // RabbitMQ configuration
+}
+
+// RabbitMQConfig RabbitMQ configuration
+type RabbitMQConfig struct {
+	URL           string `mapstructure:"URL"`            // AMQP URL (amqp://user:pass@host:port/vhost)
+	Exchange      string `mapstructure:"EXCHANGE"`       // Exchange name
+	ExchangeType  string `mapstructure:"EXCHANGE_TYPE"`  // Exchange type (direct/topic/fanout)
+	PrefetchCount int    `mapstructure:"PREFETCH_COUNT"` // Prefetch count for consumers
 }
 
 // CORSConfig CORS cross-origin configuration
@@ -159,7 +167,7 @@ type Config struct {
 	DBConfig        DatabaseConfig  `mapstructure:"DATABASE"`  // Database configuration
 	LogConfig       LogConfig       `mapstructure:"LOG"`       // Logging configuration
 	RedisConfig     RedisConfig     `mapstructure:"REDIS"`     // Redis configuration
-	KafkaConfig     KafkaConfig     `mapstructure:"KAFKA"`     // Kafka configuration
+	QueueConfig     QueueConfig     `mapstructure:"QUEUE"`     // Message queue configuration
 	AI              AIConfig        `mapstructure:"AI"`        // AI service configuration
 	TorrentConfig   TorrentConfig   `mapstructure:"TORRENT"`   // Torrent client configuration
 	TranscodeConfig TranscodeConfig `mapstructure:"TRANSCODE"` // Video transcoding configuration
