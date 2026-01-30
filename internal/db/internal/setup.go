@@ -6,8 +6,6 @@ package internal
 import (
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 
 	"gorm.io/gorm"
 )
@@ -15,12 +13,12 @@ import (
 // setupDatabase handles database initialization based on dialect
 func (m *Manager) setupDatabase() error {
 	dialect := m.config.DBConfig.DBDialect
+	if dialect == "" {
+		dialect = DialectMySQL
+		m.config.DBConfig.DBDialect = dialect
+	}
 
 	switch dialect {
-	case DialectSQLite:
-		if err := m.ensureSQLiteDBExists(); err != nil {
-			return fmt.Errorf("SQLite database creation failed: %w", err)
-		}
 	case DialectPostgres, DialectMySQL:
 		if err := m.setupSystemDatabase(); err != nil {
 			return fmt.Errorf("system database setup failed: %w", err)
@@ -75,32 +73,9 @@ func (m *Manager) ensureDBExists(db *gorm.DB) error {
 		return m.ensurePostgresDBExists(db)
 	case DialectMySQL:
 		return m.ensureMySQLDBExists(db)
-	case DialectSQLite:
-		return m.ensureSQLiteDBExists()
 	default:
 		return fmt.Errorf("unsupported database dialect: %s", m.config.DBConfig.DBDialect)
 	}
-}
-
-// ensureSQLiteDBExists ensures SQLite database exists, creates if it doesn't exist
-func (m *Manager) ensureSQLiteDBExists() error {
-	dbPath := filepath.Join(m.config.DBConfig.DBPath, m.config.DBConfig.DBName+".db")
-
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(m.config.DBConfig.DBPath, os.ModePerm); err != nil {
-			return fmt.Errorf("failed to create SQLite database directory: %w", err)
-		}
-
-		file, err := os.Create(dbPath)
-		if err != nil {
-			return fmt.Errorf("failed to create SQLite database file: %w", err)
-		}
-		file.Close()
-
-		log.Printf("SQLite database '%s' created successfully", dbPath)
-	}
-
-	return nil
 }
 
 // ensurePostgresDBExists ensures PostgreSQL database exists, creates if it doesn't exist

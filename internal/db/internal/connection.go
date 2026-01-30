@@ -5,13 +5,10 @@ package internal
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -42,26 +39,20 @@ func (m *Manager) connectToDB(dbName string) (*gorm.DB, error) {
 
 // getDialector returns the appropriate database dialector based on configuration
 func (m *Manager) getDialector(dbName string) (gorm.Dialector, error) {
-	switch m.config.DBConfig.DBDialect {
+	dialect := m.config.DBConfig.DBDialect
+	if dialect == "" {
+		dialect = DialectMySQL
+		m.config.DBConfig.DBDialect = dialect
+	}
+
+	switch dialect {
 	case DialectPostgres:
 		return m.getPostgresDialector(dbName), nil
 	case DialectMySQL:
 		return m.getMySQLDialector(dbName), nil
-	case DialectSQLite:
-		return m.getSQLiteDialector(dbName)
 	default:
-		return nil, fmt.Errorf("unsupported database dialect: %s", m.config.DBConfig.DBDialect)
+		return nil, fmt.Errorf("unsupported database dialect: %s", dialect)
 	}
-}
-
-// getSQLiteDialector returns SQLite dialector and ensures directory exists
-func (m *Manager) getSQLiteDialector(dbName string) (gorm.Dialector, error) {
-	if err := os.MkdirAll(m.config.DBConfig.DBPath, os.ModePerm); err != nil {
-		return nil, fmt.Errorf("failed to create SQLite database directory: %w", err)
-	}
-
-	dbPath := filepath.Join(m.config.DBConfig.DBPath, dbName+".db")
-	return sqlite.Open(dbPath), nil
 }
 
 // getPostgresDialector returns PostgreSQL dialector
