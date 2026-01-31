@@ -141,6 +141,64 @@ magnet-video/
     └── coding-standards.en-US.md  # 编码规范
 ```
 
+### 架构图 (Mermaid)
+
+```mermaid
+flowchart TB
+  subgraph Clients["客户端"]
+    U["用户/浏览器"]
+    A["管理员"]
+  end
+
+  subgraph App["magnet-video (Gin)"]
+    Entry["main.go → cmd.Start"]
+    Config["Viper 配置 (configs/*.yml + ENV)"]
+    Wire["Wire 容器"]
+    Gin["gin.Engine"]
+    MW["中间件\nRecovery / RequestID / CORS / Logger / JWT / Admin"]
+    Router["Router /api/v1 & /api/v2"]
+    Controllers["Controllers\nUser / Torrent / Admin / Test"]
+    Services["Services\nUser / Torrent / Transcode / Admin / Test"]
+    Web["Embedded Web UI\nweb/static"]
+  end
+
+  subgraph Infra["基础设施层"]
+    DB[(GORM DB\nMySQL/Postgres/SQLite)]
+    Redis[(Redis)]
+    Cache["Cache Manager"]
+    TorrentMgr["Torrent Manager\nanacrolix/torrent"]
+    Queue["Queue Producer\nGoChannel / RabbitMQ"]
+    Consumer["Transcode Consumer\n(Handler)"]
+    FFmpeg["FFmpeg / FFprobe"]
+    SSE["SSE Manager"]
+    AI["AI Manager\nOpenAI / Gemini"]
+    Logger["Logrus + Rotatelogs"]
+  end
+
+  subgraph External["外部系统"]
+    P2P[(BT Swarm / Trackers)]
+    MQ[(RabbitMQ 可选)]
+    Disk[(Download Dir / Transcoded Files)]
+  end
+
+  U --> Gin
+  A --> Gin
+
+  Entry --> Config --> Wire --> Gin
+  Gin --> MW --> Router --> Controllers --> Services
+  Gin --> Web
+
+  Services --> DB
+  Services --> Cache --> Redis
+  Services --> TorrentMgr --> P2P
+  Services --> Queue --> MQ
+  Queue --> Consumer --> FFmpeg --> Disk
+  TorrentMgr --> Disk
+  Services --> SSE
+  Services --> AI
+  Services --> Logger
+```
+
 ### 分层职责
 
 #### 1. 基础设施层 (`internal/`)
@@ -300,6 +358,59 @@ type User struct {
     IsActive     bool   // 是否激活
     IsAdmin      bool   // 是否管理员
 }
+```
+
+##### 抽象图 (Mermaid)
+
+> 说明: Torrent.Files / Trackers 在数据库中以 JSON 字段存储,图中以实体关系抽象表达。
+
+```mermaid
+erDiagram
+  USER ||--o{ TORRENT : owns
+  TORRENT ||--o{ TORRENT_FILE : files
+  TORRENT ||--o{ TRANSCODE_JOB : jobs
+
+  USER {
+    bigint id PK
+    string email
+    string nickname
+    string role
+    bool is_super_admin
+  }
+
+  TORRENT {
+    bigint id PK
+    string info_hash
+    string name
+    bigint total_size
+    int status
+    float progress
+    bool is_public
+    int transcode_status
+    int transcode_progress
+    bigint creator_id FK
+  }
+
+  TORRENT_FILE {
+    string path
+    bigint size
+    bool is_selected
+    bool is_streamable
+    int transcode_status
+    string transcoded_path
+  }
+
+  TRANSCODE_JOB {
+    bigint id PK
+    bigint torrent_id FK
+    string info_hash
+    int file_index
+    int status
+    int progress
+    string transcode_type
+    string input_path
+    string output_path
+  }
 ```
 
 #### 3. 应用层 (`pkg/`)
@@ -543,6 +654,52 @@ defer func() {
 ---
 
 ## 核心业务流程
+
+### 数据流图 (Mermaid)
+
+```mermaid
+sequenceDiagram
+  participant U as 用户
+  participant UI as Web UI
+  participant API as Gin API
+  participant TM as TorrentManager
+  participant DB as 数据库
+  participant Q as 队列(GoChannel/RabbitMQ)
+  participant C as Transcode Consumer
+  participant FF as FFmpeg/FFprobe
+  participant FS as 下载目录
+
+  U->>UI: 提交磁力链
+  UI->>API: POST /api/v1/torrent/parse
+  API->>TM: ParseMagnet
+  TM-->>API: 元数据/文件列表
+  API-->>UI: 解析结果
+
+  U->>UI: 选择文件并开始下载
+  UI->>API: POST /api/v1/torrent/download
+  API->>TM: StartDownload
+  API->>DB: 创建/更新 Torrent 记录
+  TM->>FS: 下载文件
+
+  UI->>API: GET /api/v1/torrent/list 或 /progress (轮询)
+  API->>TM: GetProgress
+  API->>DB: 更新进度/状态
+  API-->>UI: 下载状态
+
+  Note over API,DB: 下载完成后触发转码检测
+  API->>DB: 创建 TranscodeJob & 更新文件状态
+  API->>Q: 发送 TranscodeMessage
+  Q->>C: 消费转码任务
+  C->>FF: Remux / Transcode
+  FF->>FS: 输出 _transcoded.mp4
+  C->>DB: 更新转码进度/状态
+
+  U->>UI: 播放视频
+  UI->>API: GET /api/v1/torrent/file 或 /transcoded
+  API->>TM: 读取原始文件 (Range)
+  API->>FS: 或读取转码文件
+  API-->>UI: 流式播放
+```
 
 ### BT 下载流程
 
