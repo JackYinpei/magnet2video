@@ -99,6 +99,13 @@ func NewManager(config *configs.Config) (*Manager, error) {
 		downloadDir = "./download"
 	}
 
+	// Convert to absolute path
+	absDownloadDir, err := filepath.Abs(downloadDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path for download dir: %w", err)
+	}
+	downloadDir = absDownloadDir
+
 	// Ensure download directory exists
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create download directory: %w", err)

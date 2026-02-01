@@ -250,7 +250,9 @@ func (c *RabbitMQConsumer) consumeMessages(topic string, msgs <-chan amqp.Delive
 
 			if err := c.handler.Handle(c.ctx, msg); err != nil {
 				log.Printf("RabbitMQ consumer handle error for topic %s: %v", topic, err)
-				d.Nack(false, true) // Requeue on error
+				// Don't requeue on error - the handler already marked the job as failed
+				// Requeuing would cause infinite retry loops for permanent failures
+				d.Ack(false)
 			} else {
 				d.Ack(false)
 			}

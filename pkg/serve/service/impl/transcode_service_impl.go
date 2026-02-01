@@ -114,8 +114,8 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 
 			outputPath := ffmpeg.GenerateOutputPath(inputPath)
 
-			// Probe file to determine transcode type
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			// Probe file to determine transcode type (2 minute timeout for large files)
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			videoInfo, err := ts.ffmpeg.Probe(ctx, inputPath)
 			cancel()
 

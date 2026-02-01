@@ -233,9 +233,23 @@ func (f *FFmpeg) runWithProgress(ctx context.Context, args []string, totalDurati
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
+
+	// Capture stderr in background
+	var stderrOutput strings.Builder
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			stderrOutput.WriteString(scanner.Text() + "\n")
+		}
+	}()
 
 	// Parse progress output
 	scanner := bufio.NewScanner(stdout)
@@ -258,6 +272,10 @@ func (f *FFmpeg) runWithProgress(ctx context.Context, args []string, totalDurati
 	}
 
 	if err := cmd.Wait(); err != nil {
+		errMsg := stderrOutput.String()
+		if errMsg != "" {
+			return fmt.Errorf("ffmpeg failed: %w, stderr: %s", err, errMsg)
+		}
 		return fmt.Errorf("ffmpeg failed: %w", err)
 	}
 
