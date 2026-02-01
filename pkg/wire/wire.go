@@ -14,10 +14,9 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
+	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/sse"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
-
-	// "github.com/Done-0/gin-scaffold/internal/queue"
 
 	"github.com/Done-0/gin-scaffold/internal/redis"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller"
@@ -36,12 +35,13 @@ type Container struct {
 	I18nManager     i18n.I18nManager
 	SSEManager      sse.SSEManager
 	TorrentManager  torrent.TorrentManager
-	// QueueProducer   queue.Producer
+	QueueProducer   queue.Producer
 
 	// Controllers
 	TestController    *controller.TestController
 	TorrentController *controller.TorrentController
 	UserController    *controller.UserController
+	AdminController   *controller.AdminController
 
 	// Services
 

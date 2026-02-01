@@ -3,12 +3,18 @@ const API_BASE = '/api/v1';
 const TORRENT_API = '/api/v1/torrent';
 const AUTH_API = '/api/v1/auth';
 const USER_API = '/api/v1/user';
+const ADMIN_API = '/api/v1/admin';
 
 // 状态
 let currentInfoHash = null;
 let parsedTorrent = null;
 let progressInterval = null;
 let currentUser = null;
+
+// Admin pagination state
+let adminUsersPage = 1;
+let adminResourcesPage = 1;
+const adminPageSize = 10;
 
 // DOM 元素
 const elements = {
@@ -21,6 +27,7 @@ const elements = {
     pageDownloads: document.getElementById('page-downloads'),
     pagePlayer: document.getElementById('page-player'),
     pageProfile: document.getElementById('page-profile'),
+    pageAdmin: document.getElementById('page-admin'),
 
     // 导航
     navLinks: document.querySelectorAll('.nav-link'),
@@ -379,6 +386,16 @@ async function loadUserProfile() {
 }
 
 function updateNavUser() {
+    // Show/hide admin link based on role
+    const adminLink = document.querySelector('.nav-link.admin-only');
+    if (adminLink) {
+        if (currentUser && currentUser.role === 'admin') {
+            adminLink.classList.remove('hidden');
+        } else {
+            adminLink.classList.add('hidden');
+        }
+    }
+
     if (currentUser) {
         elements.navUser.innerHTML = `
             <div class="user-info" onclick="navigateTo('profile')">
@@ -397,11 +414,18 @@ function updateNavUser() {
 
 function navigateTo(pageName) {
     // 需要登录的页面
-    const protectedPages = ['library', 'add', 'downloads', 'profile'];
+    const protectedPages = ['library', 'add', 'downloads', 'profile', 'admin'];
 
     if (protectedPages.includes(pageName) && !currentUser) {
         showToast('请先登录', 'error');
         navigateTo('login');
+        return;
+    }
+
+    // Admin page requires admin role
+    if (pageName === 'admin' && currentUser?.role !== 'admin') {
+        showToast('需要管理员权限', 'error');
+        navigateTo('library');
         return;
     }
 
@@ -438,6 +462,9 @@ function navigateTo(pageName) {
             break;
         case 'profile':
             loadProfile();
+            break;
+        case 'admin':
+            loadAdminPage();
             break;
         default:
             stopProgressPolling();
@@ -676,7 +703,7 @@ function renderDownloads(torrents) {
                     ` : torrent.status === 4 ? `
                         <button class="btn btn-sm resume-btn" data-infohash="${torrent.info_hash}">继续</button>
                     ` : ''}
-                    <button class="btn btn-sm ${torrent.is_public ? 'btn-success' : ''}" 
+                    <button class="btn btn-sm ${torrent.is_public ? 'btn-success' : ''}"
                             onclick="togglePublic('${torrent.info_hash}', ${!torrent.is_public})">
                         ${torrent.is_public ? '✓ 公开' : '设为公开'}
                     </button>
@@ -684,7 +711,7 @@ function renderDownloads(torrents) {
                 </div>
             </div>
             <div class="download-progress">
-                <div class="download-progress-bar ${torrent.status === 2 ? 'completed' : ''}" 
+                <div class="download-progress-bar ${torrent.status === 2 ? 'completed' : ''}"
                      style="width: ${torrent.progress}%"></div>
             </div>
             <div class="download-stats">
@@ -693,6 +720,7 @@ function renderDownloads(torrents) {
                 <div class="download-stat">速度: <span>${torrent.download_speed_readable || '0 B/s'}</span></div>
                 <div class="download-stat">状态: <span>${getStatusText(torrent.status)}</span></div>
             </div>
+            ${renderTranscodeStatus(torrent)}
         </div>
     `).join('');
 
@@ -799,6 +827,53 @@ function stopProgressPolling() {
     }
 }
 
+// Render transcode status for a torrent
+function renderTranscodeStatus(torrent) {
+    // Show "待检测" for downloading torrents with transcode_status = 0
+    if (torrent.transcode_status === 0 && torrent.status !== 2) {
+        return `
+            <div class="download-transcode">
+                <div class="download-transcode-label">
+                    转码状态: <span class="transcode-badge pending">待检测</span>
+                </div>
+            </div>
+        `;
+    }
+
+    // Only show if transcode_status exists and is not 0 (no transcode needed)
+    if (!torrent.transcode_status || torrent.transcode_status === 0) {
+        return '';
+    }
+
+    const statusText = getTranscodeText(torrent.transcode_status, torrent.status);
+    const statusClass = getTranscodeClass(torrent.transcode_status);
+    const progress = torrent.transcode_progress || 0;
+    const transcoded = torrent.transcoded_count || 0;
+    const total = torrent.total_transcode || 0;
+
+    let progressHtml = '';
+    if (torrent.transcode_status === 2) { // Processing
+        progressHtml = `
+            <div class="transcode-progress">
+                <div class="transcode-progress-bar">
+                    <div class="transcode-progress-fill" style="width: ${progress}%"></div>
+                </div>
+                <span class="transcode-progress-text">${progress}%</span>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="download-transcode">
+            <div class="download-transcode-label">
+                转码状态: <span class="transcode-badge ${statusClass}">${statusText}</span>
+                ${total > 0 ? `(${transcoded}/${total} 文件)` : ''}
+            </div>
+            ${progressHtml}
+        </div>
+    `;
+}
+
 // ============ 播放器 ============
 
 let currentTorrentIsOwner = false;
@@ -870,12 +945,18 @@ async function openPlayer(infoHash, isOwner = false) {
                 const isVideo = isVideoFile(file.path);
                 const isSubtitle = isSubtitleFile(file.path);
                 const icon = isVideo ? '🎬' : (isSubtitle ? '📝' : '📄');
+                const hasTranscoded = file.transcode_status === 3 && file.transcoded_path;
+                const transcodeStatusText = getFileTranscodeStatus(file);
+                // File is playable if: (video AND streamable) OR has transcoded version
+                const isPlayable = isVideo && (file.is_streamable || hasTranscoded);
                 return `
-                        <div class="player-file-item ${!isVideo || !file.is_streamable ? 'disabled' : ''}" 
-                             data-index="${index}" 
+                        <div class="player-file-item ${!isPlayable ? 'disabled' : ''}"
+                             data-index="${index}"
                              data-path="${file.path}"
+                             data-transcoded-path="${file.transcoded_path || ''}"
+                             data-transcode-status="${file.transcode_status || 0}"
                              data-streamable="${file.is_streamable}">
-                            <span>${icon} ${file.path}</span>
+                            <span>${icon} ${file.path} ${transcodeStatusText}</span>
                             <span>${file.size_readable || formatSize(file.size)}</span>
                         </div>
                     `;
@@ -885,7 +966,12 @@ async function openPlayer(infoHash, isOwner = false) {
             // 绑定文件点击事件
             elements.playerFiles.querySelectorAll('.player-file-item:not(.disabled)').forEach(item => {
                 item.addEventListener('click', () => {
-                    playFile(item.dataset.path);
+                    const filePath = item.dataset.path;
+                    const transcodedPath = item.dataset.transcodedPath;
+                    const transcodeStatus = parseInt(item.dataset.transcodeStatus) || 0;
+                    // Use transcoded file if available (status === 3 means completed)
+                    const pathToPlay = (transcodeStatus === 3 && transcodedPath) ? transcodedPath : filePath;
+                    playFile(pathToPlay, filePath);
                     // 更新选中状态
                     elements.playerFiles.querySelectorAll('.player-file-item').forEach(i => {
                         i.classList.remove('active');
@@ -895,9 +981,16 @@ async function openPlayer(infoHash, isOwner = false) {
             });
 
             // 自动播放第一个可播放的文件
-            const firstPlayable = data.files.find(f => isVideoFile(f.path) && f.is_streamable);
+            // Playable = (streamable) OR (has transcoded version)
+            const firstPlayable = data.files.find(f =>
+                isVideoFile(f.path) && (f.is_streamable || (f.transcode_status === 3 && f.transcoded_path))
+            );
             if (firstPlayable) {
-                playFile(firstPlayable.path);
+                // Use transcoded file if available
+                const pathToPlay = (firstPlayable.transcode_status === 3 && firstPlayable.transcoded_path)
+                    ? firstPlayable.transcoded_path
+                    : firstPlayable.path;
+                playFile(pathToPlay, firstPlayable.path);
             }
         }
 
@@ -926,8 +1019,21 @@ async function togglePublicFromPlayer(infoHash, isPublic) {
     `;
 }
 
-async function playFile(filePath) {
-    const videoUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+async function playFile(filePath, originalPath = null) {
+    // originalPath is used for subtitle matching when playing transcoded files
+    const subtitleMatchPath = originalPath || filePath;
+
+    // Determine if this is a transcoded file
+    let videoUrl;
+    if (filePath.endsWith('_transcoded.mp4')) {
+        // For transcoded files, use the transcoded endpoint
+        // Remove leading ./ or / from the path
+        let relativePath = filePath.replace(/^\.\/download\//, '').replace(/^\/download\//, '').replace(/^download\//, '');
+        videoUrl = `${TORRENT_API}/transcoded/${encodeURIComponent(relativePath)}`;
+    } else {
+        // For original files, use the standard endpoint
+        videoUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+    }
 
     // Clean up previous subtitle blob URL
     if (currentSubtitleBlobUrl) {
@@ -941,8 +1047,8 @@ async function playFile(filePath) {
 
     elements.videoPlayer.src = videoUrl;
 
-    // Try to find and load matching subtitle automatically
-    const matchingSubtitle = findMatchingSubtitle(filePath, currentSubtitleFiles);
+    // Try to find and load matching subtitle automatically (use original path for matching)
+    const matchingSubtitle = findMatchingSubtitle(subtitleMatchPath, currentSubtitleFiles);
     if (matchingSubtitle) {
         await loadAndAttachSubtitle(matchingSubtitle.path);
         // Update subtitle selector UI
@@ -1029,6 +1135,400 @@ function loadProfile() {
     elements.profileEmail.textContent = currentUser.email;
     elements.profileNickname.textContent = currentUser.nickname;
     elements.profileAvatar.textContent = currentUser.nickname?.charAt(0).toUpperCase() || '👤';
+}
+
+// ============ 管理员功能 ============
+
+function loadAdminPage() {
+    // Initialize admin tabs
+    initAdminTabs();
+    // Load first tab by default
+    loadAdminUsers();
+    loadAdminStats();
+}
+
+function initAdminTabs() {
+    const tabs = document.querySelectorAll('.admin-tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            // Update active tab
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+
+            // Update active content
+            document.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
+            const targetContent = document.getElementById(`admin-tab-${tab.dataset.tab}`);
+            if (targetContent) {
+                targetContent.classList.add('active');
+            }
+
+            // Load content
+            switch (tab.dataset.tab) {
+                case 'users':
+                    loadAdminUsers();
+                    break;
+                case 'resources':
+                    loadAdminResources();
+                    break;
+                case 'stats':
+                    loadAdminStats();
+                    break;
+            }
+        });
+    });
+
+    // Search button events
+    const searchUsersBtn = document.getElementById('admin-search-users-btn');
+    if (searchUsersBtn) {
+        searchUsersBtn.addEventListener('click', () => {
+            adminUsersPage = 1;
+            loadAdminUsers();
+        });
+    }
+
+    const searchResourcesBtn = document.getElementById('admin-search-resources-btn');
+    if (searchResourcesBtn) {
+        searchResourcesBtn.addEventListener('click', () => {
+            adminResourcesPage = 1;
+            loadAdminResources();
+        });
+    }
+
+    // Refresh stats button
+    const refreshStatsBtn = document.getElementById('refresh-stats-btn');
+    if (refreshStatsBtn) {
+        refreshStatsBtn.addEventListener('click', loadAdminStats);
+    }
+}
+
+async function loadAdminUsers() {
+    const searchInput = document.getElementById('admin-user-search');
+    const roleFilter = document.getElementById('admin-user-role-filter');
+    const tbody = document.getElementById('admin-users-tbody');
+
+    const params = new URLSearchParams({
+        page: adminUsersPage,
+        page_size: adminPageSize
+    });
+
+    if (searchInput && searchInput.value) {
+        params.append('search', searchInput.value);
+    }
+    if (roleFilter && roleFilter.value) {
+        params.append('role', roleFilter.value);
+    }
+
+    try {
+        const data = await apiRequest(`${ADMIN_API}/users?${params}`);
+        renderAdminUsers(data.users || [], data.total || 0);
+    } catch (error) {
+        console.error('加载用户列表失败:', error);
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center">加载失败</td></tr>';
+        }
+    }
+}
+
+function renderAdminUsers(users, total) {
+    const tbody = document.getElementById('admin-users-tbody');
+    if (!tbody) return;
+
+    if (users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center">暂无用户</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = users.map(user => `
+        <tr>
+            <td>${user.id}</td>
+            <td>${user.email}</td>
+            <td>${user.nickname}</td>
+            <td>
+                <span class="role-badge ${user.is_super_admin ? 'super' : user.role}">${
+                    user.is_super_admin ? '超级管理员' : (user.role === 'admin' ? '管理员' : '普通用户')
+                }</span>
+            </td>
+            <td>${user.torrent_count || 0}</td>
+            <td>${formatDate(user.created_at)}</td>
+            <td class="actions">
+                ${!user.is_super_admin ? `
+                    <button class="btn btn-sm" onclick="toggleUserRole(${user.id}, '${user.role}')">
+                        ${user.role === 'admin' ? '降级' : '升级'}
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser(${user.id})">删除</button>
+                ` : '<span style="color: var(--text-secondary)">-</span>'}
+            </td>
+        </tr>
+    `).join('');
+
+    // Render pagination
+    renderAdminPagination('admin-users-pagination', total, adminUsersPage, (page) => {
+        adminUsersPage = page;
+        loadAdminUsers();
+    });
+}
+
+async function loadAdminResources() {
+    const searchInput = document.getElementById('admin-resource-search');
+    const statusFilter = document.getElementById('admin-resource-status-filter');
+    const tbody = document.getElementById('admin-resources-tbody');
+
+    const params = new URLSearchParams({
+        page: adminResourcesPage,
+        page_size: adminPageSize
+    });
+
+    if (searchInput && searchInput.value) {
+        params.append('search', searchInput.value);
+    }
+    if (statusFilter && statusFilter.value) {
+        params.append('status', statusFilter.value);
+    }
+
+    try {
+        const data = await apiRequest(`${ADMIN_API}/torrents?${params}`);
+        renderAdminResources(data.torrents || [], data.total || 0);
+    } catch (error) {
+        console.error('加载资源列表失败:', error);
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center">加载失败</td></tr>';
+        }
+    }
+}
+
+function renderAdminResources(torrents, total) {
+    const tbody = document.getElementById('admin-resources-tbody');
+    if (!tbody) return;
+
+    if (torrents.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center">暂无资源</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = torrents.map(torrent => `
+        <tr>
+            <td title="${torrent.name}">${truncate(torrent.name, 30)}</td>
+            <td>${formatSize(torrent.total_size)}</td>
+            <td><span class="status-badge ${getStatusClass(torrent.status)}">${getStatusText(torrent.status)}</span></td>
+            <td>${torrent.progress?.toFixed(1) || 0}%</td>
+            <td><span class="transcode-badge ${getTranscodeClass(torrent.transcode_status)}">${getTranscodeText(torrent.transcode_status, torrent.status)}</span></td>
+            <td>${torrent.creator_nickname || '-'}</td>
+            <td>${formatDate(torrent.created_at)}</td>
+            <td class="actions">
+                ${torrent.transcode_status === 3 ? `<button class="btn btn-sm btn-warning" onclick="resetTranscode('${torrent.info_hash}')">重置转码</button>` : ''}
+                <button class="btn btn-sm btn-danger" onclick="deleteAdminTorrent('${torrent.info_hash}')">删除</button>
+            </td>
+        </tr>
+    `).join('');
+
+    // Render pagination
+    renderAdminPagination('admin-resources-pagination', total, adminResourcesPage, (page) => {
+        adminResourcesPage = page;
+        loadAdminResources();
+    });
+}
+
+async function loadAdminStats() {
+    try {
+        const data = await apiRequest(`${ADMIN_API}/stats`);
+
+        document.getElementById('stat-total-users').textContent = data.total_users || 0;
+        document.getElementById('stat-total-torrents').textContent = data.total_torrents || 0;
+        document.getElementById('stat-total-storage').textContent = formatSize(data.total_storage || 0);
+        document.getElementById('stat-disk-usage').textContent = formatSize(data.actual_disk_usage || 0);
+        document.getElementById('stat-active-downloads').textContent = data.active_downloads || 0;
+        document.getElementById('stat-completed-downloads').textContent = data.completed_downloads || 0;
+        document.getElementById('stat-transcoding-jobs').textContent = data.transcoding_jobs || 0;
+
+        // System disk info
+        if (data.disk_total) {
+            document.getElementById('stat-disk-total').textContent = formatSize(data.disk_total);
+            document.getElementById('stat-disk-free').textContent = formatSize(data.disk_free || 0);
+        }
+    } catch (error) {
+        console.error('加载统计信息失败:', error);
+    }
+}
+
+function renderAdminPagination(containerId, total, currentPage, onPageChange) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const totalPages = Math.ceil(total / adminPageSize);
+    if (totalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = '';
+
+    // Previous button
+    html += `<button ${currentPage === 1 ? 'disabled' : ''} onclick="window.adminPageChange('${containerId}', ${currentPage - 1})">上一页</button>`;
+
+    // Page numbers
+    for (let i = 1; i <= totalPages; i++) {
+        if (i === 1 || i === totalPages || (i >= currentPage - 2 && i <= currentPage + 2)) {
+            html += `<button class="${i === currentPage ? 'active' : ''}" onclick="window.adminPageChange('${containerId}', ${i})">${i}</button>`;
+        } else if (i === currentPage - 3 || i === currentPage + 3) {
+            html += '<button disabled>...</button>';
+        }
+    }
+
+    // Next button
+    html += `<button ${currentPage === totalPages ? 'disabled' : ''} onclick="window.adminPageChange('${containerId}', ${currentPage + 1})">下一页</button>`;
+
+    container.innerHTML = html;
+
+    // Store callback for global access
+    window.adminPaginationCallbacks = window.adminPaginationCallbacks || {};
+    window.adminPaginationCallbacks[containerId] = onPageChange;
+}
+
+// Global pagination handler
+window.adminPageChange = function(containerId, page) {
+    if (window.adminPaginationCallbacks && window.adminPaginationCallbacks[containerId]) {
+        window.adminPaginationCallbacks[containerId](page);
+    }
+};
+
+async function toggleUserRole(userId, currentRole) {
+    const newRole = currentRole === 'admin' ? 'user' : 'admin';
+    const action = newRole === 'admin' ? '升级为管理员' : '降级为普通用户';
+
+    if (!confirm(`确定要将此用户${action}吗？`)) {
+        return;
+    }
+
+    try {
+        await apiRequest(`${ADMIN_API}/users/${userId}/role`, {
+            method: 'PUT',
+            body: JSON.stringify({ role: newRole })
+        });
+        showToast(`已${action}`, 'success');
+        loadAdminUsers();
+    } catch (error) {
+        showToast(error.message || '操作失败', 'error');
+    }
+}
+
+async function deleteUser(userId) {
+    if (!confirm('确定要删除此用户吗？该用户的所有资源也将被删除！')) {
+        return;
+    }
+
+    try {
+        await apiRequest(`${ADMIN_API}/users/${userId}`, {
+            method: 'DELETE'
+        });
+        showToast('用户已删除', 'success');
+        loadAdminUsers();
+        loadAdminStats();
+    } catch (error) {
+        showToast(error.message || '删除失败', 'error');
+    }
+}
+
+async function deleteAdminTorrent(infoHash) {
+    if (!confirm('确定要删除此资源吗？文件也将被删除！')) {
+        return;
+    }
+
+    try {
+        await apiRequest(`${ADMIN_API}/torrents/${infoHash}`, {
+            method: 'DELETE'
+        });
+        showToast('资源已删除', 'success');
+        loadAdminResources();
+        loadAdminStats();
+    } catch (error) {
+        showToast(error.message || '删除失败', 'error');
+    }
+}
+
+async function resetTranscode(infoHash) {
+    if (!confirm('确定要重置此资源的转码状态吗？转码后的文件将被删除，系统会自动重新检测并转码。')) {
+        return;
+    }
+
+    try {
+        const data = await apiRequest(`${ADMIN_API}/torrents/${infoHash}/transcode`, {
+            method: 'DELETE'
+        });
+        showToast(data.message || '转码已重置', 'success');
+        loadAdminResources();
+        loadAdminStats();
+    } catch (error) {
+        showToast(error.message || '重置失败', 'error');
+    }
+}
+
+// Helper functions for admin
+function formatDate(dateStr) {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function truncate(str, maxLen) {
+    if (!str) return '';
+    return str.length > maxLen ? str.substring(0, maxLen) + '...' : str;
+}
+
+function getStatusClass(status) {
+    const classMap = {
+        0: 'pending',
+        1: 'downloading',
+        2: 'completed',
+        3: 'failed',
+        4: 'paused'
+    };
+    return classMap[status] || 'pending';
+}
+
+function getTranscodeText(status, downloadStatus = 2) {
+    // If download is not completed and transcode_status is 0, show "待检测"
+    if (status === 0 && downloadStatus !== 2) {
+        return '待检测';
+    }
+    const textMap = {
+        0: '无需转码',
+        1: '待转码',
+        2: '转码中',
+        3: '已完成',
+        4: '失败'
+    };
+    return textMap[status] || '未知';
+}
+
+function getTranscodeClass(status) {
+    const classMap = {
+        0: 'none',
+        1: 'pending',
+        2: 'processing',
+        3: 'completed',
+        4: 'failed'
+    };
+    return classMap[status] || 'none';
+}
+
+// Get transcode status text for individual file in player
+function getFileTranscodeStatus(file) {
+    if (!file.transcode_status || file.transcode_status === 0) {
+        return '';
+    }
+    const statusMap = {
+        1: '<span class="file-transcode-badge pending">待转码</span>',
+        2: '<span class="file-transcode-badge processing">转码中</span>',
+        3: '<span class="file-transcode-badge completed">已转码</span>',
+        4: '<span class="file-transcode-badge failed">转码失败</span>'
+    };
+    return statusMap[file.transcode_status] || '';
 }
 
 // ============ 事件监听初始化 ============
@@ -1139,3 +1639,9 @@ window.navigateTo = navigateTo;
 window.togglePublic = togglePublic;
 window.togglePublicFromPlayer = togglePublicFromPlayer;
 window.selectSubtitle = selectSubtitle;
+
+// Admin functions
+window.toggleUserRole = toggleUserRole;
+window.deleteUser = deleteUser;
+window.deleteAdminTorrent = deleteAdminTorrent;
+window.resetTranscode = resetTranscode;

@@ -11,10 +11,9 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
+	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/sse"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
-
-	// "github.com/Done-0/gin-scaffold/internal/queue"
 
 	"github.com/Done-0/gin-scaffold/internal/redis"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller"
@@ -28,7 +27,7 @@ var InfrastructureProviders = wire.NewSet(
 	db.New,
 	logger.New,
 	i18n.New,
-	// queue.NewProducer,
+	queue.NewProducer,
 	redis.New,
 	sse.New,
 	torrent.New,
@@ -42,6 +41,8 @@ var ServiceProviders = wire.NewSet(
 	impl.NewTestService,
 	impl.NewTorrentService,
 	impl.NewUserService,
+	impl.NewAdminService,
+	impl.NewTranscodeService,
 )
 
 // ControllerProviders provides controller layer dependencies
@@ -49,6 +50,7 @@ var ControllerProviders = wire.NewSet(
 	controller.NewTestController,
 	controller.NewTorrentController,
 	controller.NewUserController,
+	controller.NewAdminController,
 )
 
 // AllProviders combines all provider sets in dependency order

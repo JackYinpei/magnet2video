@@ -22,6 +22,7 @@ func NewProducer(config *configs.Config) (*Producer, error) {
 	kafkaConfig := sarama.NewConfig()
 	kafkaConfig.Producer.RequiredAcks = sarama.WaitForAll
 	kafkaConfig.Producer.Retry.Max = 3
+	kafkaConfig.Producer.Return.Successes = true // Required for SyncProducer
 
 	producer, err := sarama.NewSyncProducer(config.KafkaConfig.Brokers, kafkaConfig)
 	if err != nil {

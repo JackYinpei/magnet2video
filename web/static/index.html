@@ -19,6 +19,7 @@
                 <a href="#" class="nav-link" data-page="public">公共资源</a>
                 <a href="#" class="nav-link" data-page="add">添加</a>
                 <a href="#" class="nav-link" data-page="downloads">下载</a>
+                <a href="#" class="nav-link admin-only hidden" data-page="admin">管理</a>
             </div>
             <div class="nav-user" id="nav-user">
                 <!-- 动态渲染用户信息或登录按钮 -->
@@ -157,6 +158,127 @@
                     </video>
                 </div>
                 <div id="player-files" class="player-files"></div>
+            </div>
+
+            <!-- 管理员页面 -->
+            <div id="page-admin" class="page">
+                <h2>系统管理</h2>
+                <div class="admin-tabs">
+                    <button class="admin-tab active" data-tab="users">用户管理</button>
+                    <button class="admin-tab" data-tab="resources">资源管理</button>
+                    <button class="admin-tab" data-tab="stats">系统统计</button>
+                </div>
+
+                <!-- 用户管理 Tab -->
+                <div id="admin-tab-users" class="admin-tab-content active">
+                    <div class="admin-search">
+                        <input type="text" id="admin-user-search" placeholder="搜索用户邮箱或昵称...">
+                        <select id="admin-user-role-filter">
+                            <option value="">所有角色</option>
+                            <option value="user">普通用户</option>
+                            <option value="admin">管理员</option>
+                        </select>
+                        <button id="admin-search-users-btn" class="btn btn-sm">搜索</button>
+                    </div>
+                    <div id="admin-users-list" class="admin-table-container">
+                        <table class="admin-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>邮箱</th>
+                                    <th>昵称</th>
+                                    <th>角色</th>
+                                    <th>资源数</th>
+                                    <th>注册时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-users-tbody">
+                                <!-- 动态渲染 -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="admin-pagination" id="admin-users-pagination"></div>
+                </div>
+
+                <!-- 资源管理 Tab -->
+                <div id="admin-tab-resources" class="admin-tab-content">
+                    <div class="admin-search">
+                        <input type="text" id="admin-resource-search" placeholder="搜索资源名称...">
+                        <select id="admin-resource-status-filter">
+                            <option value="">所有状态</option>
+                            <option value="0">等待中</option>
+                            <option value="1">下载中</option>
+                            <option value="2">已完成</option>
+                            <option value="3">已暂停</option>
+                            <option value="4">失败</option>
+                        </select>
+                        <button id="admin-search-resources-btn" class="btn btn-sm">搜索</button>
+                    </div>
+                    <div id="admin-resources-list" class="admin-table-container">
+                        <table class="admin-table">
+                            <thead>
+                                <tr>
+                                    <th>名称</th>
+                                    <th>大小</th>
+                                    <th>状态</th>
+                                    <th>进度</th>
+                                    <th>转码</th>
+                                    <th>创建者</th>
+                                    <th>创建时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-resources-tbody">
+                                <!-- 动态渲染 -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="admin-pagination" id="admin-resources-pagination"></div>
+                </div>
+
+                <!-- 系统统计 Tab -->
+                <div id="admin-tab-stats" class="admin-tab-content">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-total-users">0</div>
+                            <div class="stat-label">总用户数</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-total-torrents">0</div>
+                            <div class="stat-label">总资源数</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-total-storage">0 GB</div>
+                            <div class="stat-label">数据库存储</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-disk-usage">0 GB</div>
+                            <div class="stat-label">实际磁盘占用</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-disk-total">0 GB</div>
+                            <div class="stat-label">磁盘总容量</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-disk-free">0 GB</div>
+                            <div class="stat-label">磁盘可用空间</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-active-downloads">0</div>
+                            <div class="stat-label">活跃下载</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-completed-downloads">0</div>
+                            <div class="stat-label">已完成下载</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-transcoding-jobs">0</div>
+                            <div class="stat-label">转码任务</div>
+                        </div>
+                    </div>
+                    <button id="refresh-stats-btn" class="btn btn-primary">刷新统计</button>
+                </div>
             </div>
 
             <!-- 个人资料页面 -->

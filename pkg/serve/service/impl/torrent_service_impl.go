@@ -25,10 +25,16 @@ import (
 
 // TorrentServiceImpl torrent service implementation
 type TorrentServiceImpl struct {
-	loggerManager  logger.LoggerManager
-	dbManager      db.DatabaseManager
-	torrentManager torrent.TorrentManager
-	cacheManager   cache.CacheManager
+	loggerManager    logger.LoggerManager
+	dbManager        db.DatabaseManager
+	torrentManager   torrent.TorrentManager
+	cacheManager     cache.CacheManager
+	transcodeChecker TranscodeChecker // Lazy-loaded to avoid circular dependency
+}
+
+// TranscodeChecker interface for triggering transcode check
+type TranscodeChecker interface {
+	TriggerTranscodeCheck(torrentID int64)
 }
 
 // NewTorrentService creates torrent service implementation
@@ -49,6 +55,50 @@ func NewTorrentService(
 	go instance.restoreTorrents()
 
 	return instance
+}
+
+// SetTranscodeChecker sets the transcode checker (called after all services are created)
+func (ts *TorrentServiceImpl) SetTranscodeChecker(checker TranscodeChecker) {
+	ts.transcodeChecker = checker
+
+	// Check completed torrents that haven't been checked for transcoding yet
+	go ts.checkPendingTranscodes()
+}
+
+// checkPendingTranscodes checks all completed torrents that need transcode detection
+func (ts *TorrentServiceImpl) checkPendingTranscodes() {
+	// Wait for system to stabilize
+	time.Sleep(5 * time.Second)
+
+	if ts.transcodeChecker == nil {
+		return
+	}
+
+	ts.loggerManager.Logger().Info("Checking completed torrents for pending transcode...")
+
+	var torrents []torrentModel.Torrent
+	// Find completed torrents with transcode_status = 0 (not checked yet)
+	err := ts.dbManager.DB().Where("deleted = ? AND status = ? AND transcode_status = ?",
+		false, torrentModel.StatusCompleted, 0).Find(&torrents).Error
+
+	if err != nil {
+		ts.loggerManager.Logger().Errorf("Failed to find pending transcode torrents: %v", err)
+		return
+	}
+
+	if len(torrents) == 0 {
+		ts.loggerManager.Logger().Info("No pending transcode torrents found")
+		return
+	}
+
+	ts.loggerManager.Logger().Infof("Found %d torrents pending transcode check", len(torrents))
+
+	for _, t := range torrents {
+		ts.loggerManager.Logger().Infof("Triggering transcode check for: %s", t.Name)
+		ts.transcodeChecker.TriggerTranscodeCheck(t.ID)
+		// Small delay between checks to avoid overwhelming the system
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // ParseMagnet parses a magnet URI and returns available files
@@ -381,14 +431,18 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 	items := make([]vo.TorrentListItem, len(torrents))
 	for i, t := range torrents {
 		items[i] = vo.TorrentListItem{
-			InfoHash:   t.InfoHash,
-			Name:       t.Name,
-			TotalSize:  t.TotalSize,
-			Progress:   t.Progress,
-			Status:     t.Status,
-			PosterPath: t.PosterPath,
-			CreatedAt:  t.CreatedAt,
-			IsPublic:   t.IsPublic,
+			InfoHash:          t.InfoHash,
+			Name:              t.Name,
+			TotalSize:         t.TotalSize,
+			Progress:          t.Progress,
+			Status:            t.Status,
+			PosterPath:        t.PosterPath,
+			CreatedAt:         t.CreatedAt,
+			IsPublic:          t.IsPublic,
+			TranscodeStatus:   t.TranscodeStatus,
+			TranscodeProgress: t.TranscodeProgress,
+			TranscodedCount:   t.TranscodedCount,
+			TotalTranscode:    t.TotalTranscode,
 		}
 
 		// Mix in real-time stats if downloading or seeding
@@ -397,6 +451,26 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 				items[i].Progress = progress.Progress
 				items[i].DownloadSpeed = progress.DownloadSpeed
 				items[i].DownloadSpeedReadable = formatSpeed(progress.DownloadSpeed)
+
+				// Check if download just completed (was downloading, now completed)
+				if t.Status == torrentModel.StatusDownloading && progress.Status == "completed" {
+					// Update database status
+					ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+						Where("info_hash = ?", t.InfoHash).
+						Updates(map[string]any{
+							"status":   torrentModel.StatusCompleted,
+							"progress": 100,
+						})
+
+					// Update local item
+					items[i].Status = torrentModel.StatusCompleted
+					items[i].Progress = 100
+
+					// Trigger transcode check asynchronously
+					if ts.transcodeChecker != nil {
+						go ts.transcodeChecker.TriggerTranscodeCheck(t.ID)
+					}
+				}
 			}
 		}
 	}
@@ -416,11 +490,13 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 	files := make([]vo.TorrentFileInfo, len(t.Files))
 	for i, f := range t.Files {
 		files[i] = vo.TorrentFileInfo{
-			Index:        i,
-			Path:         f.Path,
-			Size:         f.Size,
-			SizeReadable: formatSize(f.Size),
-			IsStreamable: f.IsStreamable,
+			Index:           i,
+			Path:            f.Path,
+			Size:            f.Size,
+			SizeReadable:    formatSize(f.Size),
+			IsStreamable:    f.IsStreamable,
+			TranscodeStatus: f.TranscodeStatus,
+			TranscodedPath:  f.TranscodedPath,
 		}
 	}
 
@@ -459,6 +535,11 @@ func (ts *TorrentServiceImpl) GetFileStream(c *gin.Context, infoHash string, fil
 	}
 
 	return reader, fileInfo, nil
+}
+
+// GetDownloadDir returns the download directory path
+func (ts *TorrentServiceImpl) GetDownloadDir() string {
+	return ts.torrentManager.Client().GetDownloadDir()
 }
 
 // Helper functions

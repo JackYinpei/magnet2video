@@ -13,6 +13,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
+	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/redis"
 	"github.com/Done-0/gin-scaffold/internal/sse"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
@@ -44,12 +45,26 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	if err != nil {
 		return nil, err
 	}
+	queueProducer, err := queue.NewProducer(config)
+	if err != nil {
+		return nil, err
+	}
 	testService := impl.NewTestService(loggerManager, redisManager, manager)
 	testController := controller.NewTestController(testService, sseManager)
 	torrentService := impl.NewTorrentService(loggerManager, databaseManager, torrentManager, cacheManager)
 	torrentController := controller.NewTorrentController(torrentService)
 	userService := impl.NewUserService(loggerManager, databaseManager)
 	userController := controller.NewUserController(userService)
+	adminService := impl.NewAdminService(loggerManager, databaseManager, torrentManager)
+	adminController := controller.NewAdminController(adminService)
+	transcodeService := impl.NewTranscodeService(config, loggerManager, databaseManager, torrentManager, queueProducer)
+
+	// Connect TorrentService with TranscodeService for download completion callback
+	if ts, ok := torrentService.(*impl.TorrentServiceImpl); ok {
+		if tc, ok := transcodeService.(*impl.TranscodeServiceImpl); ok {
+			ts.SetTranscodeChecker(tc)
+		}
+	}
 	container := &Container{
 		Config:            config,
 		AIManager:         manager,
@@ -60,9 +75,11 @@ func NewContainer(config *configs.Config) (*Container, error) {
 		I18nManager:       i18nManager,
 		SSEManager:        sseManager,
 		TorrentManager:    torrentManager,
+		QueueProducer:     queueProducer,
 		TestController:    testController,
 		TorrentController: torrentController,
 		UserController:    userController,
+		AdminController:   adminController,
 	}
 	return container, nil
 }
@@ -82,9 +99,11 @@ type Container struct {
 	I18nManager     i18n.I18nManager
 	SSEManager      sse.SSEManager
 	TorrentManager  torrent.TorrentManager
+	QueueProducer   queue.Producer
 
 	// Controllers
 	TestController    *controller.TestController
 	TorrentController *controller.TorrentController
 	UserController    *controller.UserController
+	AdminController   *controller.AdminController
 }
