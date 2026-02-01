@@ -21,6 +21,11 @@ type TorrentFile struct {
 	TranscodeStatus int    `json:"transcode_status"` // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
 	TranscodedPath  string `json:"transcoded_path"`  // Path to the transcoded file
 	TranscodeError  string `json:"transcode_error"`  // Transcode error message if failed
+
+	// Cloud Storage fields
+	CloudUploadStatus int    `json:"cloud_upload_status"` // Cloud upload status: 0=none, 1=pending, 2=uploading, 3=completed, 4=failed
+	CloudPath         string `json:"cloud_path"`          // Cloud storage object path
+	CloudUploadError  string `json:"cloud_upload_error"`  // Cloud upload error message if failed
 }
 
 // Transcode status constants for TorrentFile
@@ -30,6 +35,15 @@ const (
 	TranscodeStatusProcessing = 2 // Currently transcoding
 	TranscodeStatusCompleted  = 3 // Transcoding completed
 	TranscodeStatusFailed     = 4 // Transcoding failed
+)
+
+// Cloud upload status constants for TorrentFile
+const (
+	CloudUploadStatusNone      = 0 // No cloud upload needed
+	CloudUploadStatusPending   = 1 // Waiting for upload
+	CloudUploadStatusUploading = 2 // Currently uploading
+	CloudUploadStatusCompleted = 3 // Upload completed
+	CloudUploadStatusFailed    = 4 // Upload failed
 )
 
 // TorrentFiles is a slice of TorrentFile that can be stored in database
@@ -71,6 +85,12 @@ type Torrent struct {
 	TranscodeProgress int          `gorm:"type:int;default:0" json:"transcode_progress"`             // Transcode progress percentage (0-100)
 	TranscodedCount   int          `gorm:"type:int;default:0" json:"transcoded_count"`               // Number of transcoded files
 	TotalTranscode    int          `gorm:"type:int;default:0" json:"total_transcode"`                // Total number of files to transcode
+
+	// Cloud Storage overall status
+	CloudUploadStatus   int `gorm:"type:int;default:0" json:"cloud_upload_status"`   // Overall cloud upload status
+	CloudUploadProgress int `gorm:"type:int;default:0" json:"cloud_upload_progress"` // Cloud upload progress percentage (0-100)
+	CloudUploadedCount  int `gorm:"type:int;default:0" json:"cloud_uploaded_count"`  // Number of uploaded files
+	TotalCloudUpload    int `gorm:"type:int;default:0" json:"total_cloud_upload"`    // Total number of files to upload
 }
 
 // StringSlice is a slice of strings that can be stored in database

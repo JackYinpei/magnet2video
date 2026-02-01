@@ -11,6 +11,7 @@ import (
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/ai"
 	"github.com/Done-0/gin-scaffold/internal/cache"
+	"github.com/Done-0/gin-scaffold/internal/cloud"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
@@ -27,15 +28,16 @@ type Container struct {
 	Config *configs.Config
 
 	// Infrastructure
-	AIManager       *ai.AIManager
-	CacheManager    cache.CacheManager
-	DatabaseManager db.DatabaseManager
-	RedisManager    redis.RedisManager
-	LoggerManager   logger.LoggerManager
-	I18nManager     i18n.I18nManager
-	SSEManager      sse.SSEManager
-	TorrentManager  torrent.TorrentManager
-	QueueProducer   queue.Producer
+	AIManager           *ai.AIManager
+	CacheManager        cache.CacheManager
+	CloudStorageManager cloud.CloudStorageManager
+	DatabaseManager     db.DatabaseManager
+	RedisManager        redis.RedisManager
+	LoggerManager       logger.LoggerManager
+	I18nManager         i18n.I18nManager
+	SSEManager          sse.SSEManager
+	TorrentManager      torrent.TorrentManager
+	QueueProducer       queue.Producer
 
 	// Controllers
 	TestController    *controller.TestController

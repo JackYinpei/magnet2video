@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
 	"github.com/Done-0/gin-scaffold/configs"
+	cloudTypes "github.com/Done-0/gin-scaffold/internal/cloud/types"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/logger"
 	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
@@ -177,6 +179,21 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 					Update("status", transcodeModel.JobStatusFailed)
 				torrentRecord.Files[i].TranscodeStatus = torrentModel.TranscodeStatusFailed
 				torrentRecord.Files[i].TranscodeError = "failed to queue transcode job"
+			}
+		} else {
+			// File doesn't need transcoding, queue for cloud upload directly if enabled
+			if ts.config.CloudStorageConfig.Enabled {
+				inputPath := filepath.Join(downloadDir, file.Path)
+				// Check if file exists at direct path
+				if _, err := os.Stat(inputPath); os.IsNotExist(err) {
+					// Try with torrent name as directory prefix
+					inputPath = filepath.Join(downloadDir, torrentRecord.Name, filepath.Base(file.Path))
+				}
+
+				fileInfo, err := os.Stat(inputPath)
+				if err == nil {
+					ts.queueCloudUpload(torrentID, torrentRecord.InfoHash, i, inputPath, fileInfo.Size(), false, torrentRecord.CreatorID, &torrentRecord)
+				}
 			}
 		}
 	}
@@ -380,5 +397,67 @@ func (ts *TranscodeServiceImpl) TriggerTranscodeCheck(torrentID int64) {
 	// Use a background context since this is called asynchronously
 	if err := ts.CheckAndQueueTranscode(&gin.Context{}, torrentID); err != nil {
 		ts.loggerManager.Logger().Errorf("Failed to check and queue transcode: %v", err)
+	}
+}
+
+// queueCloudUpload sends a cloud upload job to the queue
+func (ts *TranscodeServiceImpl) queueCloudUpload(torrentID int64, infoHash string, fileIndex int, localPath string, fileSize int64, isTranscoded bool, creatorID int64, torrentRecord *torrentModel.Torrent) {
+	// Build cloud path
+	pathPrefix := ts.config.CloudStorageConfig.PathPrefix
+	if pathPrefix == "" {
+		pathPrefix = "torrents"
+	}
+	fileName := filepath.Base(localPath)
+	cloudPath := fmt.Sprintf("%s/%s/%s", pathPrefix, infoHash, fileName)
+
+	// Determine content type
+	contentType := "application/octet-stream"
+	ext := strings.ToLower(filepath.Ext(localPath))
+	contentTypes := map[string]string{
+		".mp4":  "video/mp4",
+		".webm": "video/webm",
+		".mkv":  "video/x-matroska",
+		".avi":  "video/x-msvideo",
+		".mp3":  "audio/mpeg",
+		".flac": "audio/flac",
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".png":  "image/png",
+		".pdf":  "application/pdf",
+		".zip":  "application/zip",
+	}
+	if ct, ok := contentTypes[ext]; ok {
+		contentType = ct
+	}
+
+	// Update file cloud status to pending
+	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
+		torrentRecord.Files[fileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusPending
+		torrentRecord.TotalCloudUpload++
+	}
+
+	msg := cloudTypes.CloudUploadMessage{
+		TorrentID:    torrentID,
+		InfoHash:     infoHash,
+		FileIndex:    fileIndex,
+		LocalPath:    localPath,
+		CloudPath:    cloudPath,
+		ContentType:  contentType,
+		FileSize:     fileSize,
+		IsTranscoded: isTranscoded,
+		CreatorID:    creatorID,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		ts.loggerManager.Logger().Errorf("failed to marshal cloud upload message: %v", err)
+		return
+	}
+
+	if err := ts.queueProducer.Send(context.Background(), cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
+		ts.loggerManager.Logger().Errorf("failed to send cloud upload message: %v", err)
+	} else {
+		ts.loggerManager.Logger().Infof("Queued cloud upload: torrentID=%d, fileIndex=%d, cloudPath=%s",
+			torrentID, fileIndex, cloudPath)
 	}
 }

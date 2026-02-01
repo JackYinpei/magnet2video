@@ -151,26 +151,45 @@ type TorrentConfig struct {
 
 // TranscodeConfig video transcoding configuration
 type TranscodeConfig struct {
-	FFmpegPath      string   `mapstructure:"FFMPEG_PATH"`       // FFmpeg executable path
-	FFprobePath     string   `mapstructure:"FFPROBE_PATH"`      // FFprobe executable path
-	WorkerCount     int      `mapstructure:"WORKER_COUNT"`      // Number of concurrent transcode workers
-	SupportedInputs []string `mapstructure:"SUPPORTED_INPUTS"`  // Input formats that need transcoding
-	DefaultCodec    string   `mapstructure:"DEFAULT_CODEC"`     // Default output codec (h264)
-	DefaultPreset   string   `mapstructure:"DEFAULT_PRESET"`    // Encoding preset (medium)
-	DefaultCRF      int      `mapstructure:"DEFAULT_CRF"`       // CRF value for quality (23)
-	DefaultAudioCodec string `mapstructure:"DEFAULT_AUDIO_CODEC"` // Default audio codec (aac)
+	FFmpegPath        string   `mapstructure:"FFMPEG_PATH"`        // FFmpeg executable path
+	FFprobePath       string   `mapstructure:"FFPROBE_PATH"`       // FFprobe executable path
+	WorkerCount       int      `mapstructure:"WORKER_COUNT"`       // Number of concurrent transcode workers
+	SupportedInputs   []string `mapstructure:"SUPPORTED_INPUTS"`   // Input formats that need transcoding
+	DefaultCodec      string   `mapstructure:"DEFAULT_CODEC"`      // Default output codec (h264)
+	DefaultPreset     string   `mapstructure:"DEFAULT_PRESET"`     // Encoding preset (medium)
+	DefaultCRF        int      `mapstructure:"DEFAULT_CRF"`        // CRF value for quality (23)
+	DefaultAudioCodec string   `mapstructure:"DEFAULT_AUDIO_CODEC"` // Default audio codec (aac)
+}
+
+// CloudStorageConfig cloud storage configuration
+type CloudStorageConfig struct {
+	Enabled              bool   `mapstructure:"ENABLED"`                 // Whether cloud storage is enabled
+	Provider             string `mapstructure:"PROVIDER"`                // Cloud provider: "gcs" or "s3"
+	BucketName           string `mapstructure:"BUCKET_NAME"`             // Cloud storage bucket name
+	SignedURLExpireHours int    `mapstructure:"SIGNED_URL_EXPIRE_HOURS"` // Signed URL expiration time in hours (default 3)
+	PathPrefix           string `mapstructure:"PATH_PREFIX"`             // Object path prefix (default "torrents")
+
+	// GCS specific
+	CredentialsFile string `mapstructure:"CREDENTIALS_FILE"` // GCS service account JSON file path
+
+	// S3/S3-compatible specific
+	Region          string `mapstructure:"REGION"`            // AWS region (e.g. "us-east-1")
+	AccessKeyID     string `mapstructure:"ACCESS_KEY_ID"`     // AWS Access Key ID
+	SecretAccessKey string `mapstructure:"SECRET_ACCESS_KEY"` // AWS Secret Access Key
+	Endpoint        string `mapstructure:"ENDPOINT"`          // Custom endpoint for S3-compatible storage (MinIO, etc.)
 }
 
 // Config main configuration structure
 type Config struct {
-	AppConfig       AppConfig       `mapstructure:"APP"`       // Application configuration
-	DBConfig        DatabaseConfig  `mapstructure:"DATABASE"`  // Database configuration
-	LogConfig       LogConfig       `mapstructure:"LOG"`       // Logging configuration
-	RedisConfig     RedisConfig     `mapstructure:"REDIS"`     // Redis configuration
-	QueueConfig     QueueConfig     `mapstructure:"QUEUE"`     // Message queue configuration
-	AI              AIConfig        `mapstructure:"AI"`        // AI service configuration
-	TorrentConfig   TorrentConfig   `mapstructure:"TORRENT"`   // Torrent client configuration
-	TranscodeConfig TranscodeConfig `mapstructure:"TRANSCODE"` // Video transcoding configuration
+	AppConfig          AppConfig          `mapstructure:"APP"`           // Application configuration
+	DBConfig           DatabaseConfig     `mapstructure:"DATABASE"`      // Database configuration
+	LogConfig          LogConfig          `mapstructure:"LOG"`           // Logging configuration
+	RedisConfig        RedisConfig        `mapstructure:"REDIS"`         // Redis configuration
+	QueueConfig        QueueConfig        `mapstructure:"QUEUE"`         // Message queue configuration
+	AI                 AIConfig           `mapstructure:"AI"`            // AI service configuration
+	TorrentConfig      TorrentConfig      `mapstructure:"TORRENT"`       // Torrent client configuration
+	TranscodeConfig    TranscodeConfig    `mapstructure:"TRANSCODE"`     // Video transcoding configuration
+	CloudStorageConfig CloudStorageConfig `mapstructure:"CLOUD_STORAGE"` // Cloud storage configuration
 }
 
 // Configuration file path constants
@@ -258,6 +277,11 @@ func bindEnvVariables() {
 	// Admin user bindings
 	_ = v.BindEnv("APP.USER.SUPER_ADMIN_EMAIL", "SUPER_ADMIN_EMAIL")
 	_ = v.BindEnv("APP.USER.SUPER_ADMIN_PASSWORD", "SUPER_ADMIN_PASSWORD")
+
+	// Cloud Storage bindings
+	_ = v.BindEnv("CLOUD_STORAGE.ENABLED", "CLOUD_STORAGE_ENABLED")
+	_ = v.BindEnv("CLOUD_STORAGE.CREDENTIALS_FILE", "GCS_CREDENTIALS_FILE")
+	_ = v.BindEnv("CLOUD_STORAGE.BUCKET_NAME", "GCS_BUCKET_NAME")
 }
 
 // overrideFromEnv overrides config values from environment variables
@@ -327,6 +351,17 @@ func overrideFromEnv(config *Config) {
 	}
 	if val := os.Getenv("SUPER_ADMIN_PASSWORD"); val != "" {
 		config.AppConfig.User.SuperAdminPassword = val
+	}
+
+	// Cloud Storage overrides
+	if val := os.Getenv("CLOUD_STORAGE_ENABLED"); val != "" {
+		config.CloudStorageConfig.Enabled = val == "true" || val == "1"
+	}
+	if val := os.Getenv("GCS_CREDENTIALS_FILE"); val != "" {
+		config.CloudStorageConfig.CredentialsFile = val
+	}
+	if val := os.Getenv("GCS_BUCKET_NAME"); val != "" {
+		config.CloudStorageConfig.BucketName = val
 	}
 }
 

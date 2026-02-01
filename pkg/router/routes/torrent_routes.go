@@ -26,6 +26,9 @@ func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 
 		// Serve transcoded file from download directory
 		publicTorrent.GET("/transcoded/*file_path", container.TorrentController.ServeTranscodedFile)
+
+		// Get signed cloud URL for a file
+		publicTorrent.GET("/cloud-url/:info_hash/:file_index", container.TorrentController.GetCloudURL)
 	}
 
 	// Protected routes (auth required) - for managing own resources

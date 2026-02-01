@@ -969,9 +969,10 @@ async function openPlayer(infoHash, isOwner = false) {
                     const filePath = item.dataset.path;
                     const transcodedPath = item.dataset.transcodedPath;
                     const transcodeStatus = parseInt(item.dataset.transcodeStatus) || 0;
+                    const fileIdx = parseInt(item.dataset.index);
                     // Use transcoded file if available (status === 3 means completed)
                     const pathToPlay = (transcodeStatus === 3 && transcodedPath) ? transcodedPath : filePath;
-                    playFile(pathToPlay, filePath);
+                    playFile(pathToPlay, filePath, fileIdx);
                     // 更新选中状态
                     elements.playerFiles.querySelectorAll('.player-file-item').forEach(i => {
                         i.classList.remove('active');
@@ -982,15 +983,16 @@ async function openPlayer(infoHash, isOwner = false) {
 
             // 自动播放第一个可播放的文件
             // Playable = (streamable) OR (has transcoded version)
-            const firstPlayable = data.files.find(f =>
+            const firstPlayableIdx = data.files.findIndex(f =>
                 isVideoFile(f.path) && (f.is_streamable || (f.transcode_status === 3 && f.transcoded_path))
             );
-            if (firstPlayable) {
+            if (firstPlayableIdx >= 0) {
+                const firstPlayable = data.files[firstPlayableIdx];
                 // Use transcoded file if available
                 const pathToPlay = (firstPlayable.transcode_status === 3 && firstPlayable.transcoded_path)
                     ? firstPlayable.transcoded_path
                     : firstPlayable.path;
-                playFile(pathToPlay, firstPlayable.path);
+                playFile(pathToPlay, firstPlayable.path, firstPlayableIdx);
             }
         }
 
@@ -1019,20 +1021,42 @@ async function togglePublicFromPlayer(infoHash, isPublic) {
     `;
 }
 
-async function playFile(filePath, originalPath = null) {
+// Get local file URL for playback
+function getLocalFileUrl(filePath) {
+    if (filePath.endsWith('_transcoded.mp4')) {
+        // For transcoded files, use the transcoded endpoint
+        let relativePath = filePath.replace(/^\.\/download\//, '').replace(/^\/download\//, '').replace(/^download\//, '');
+        return `${TORRENT_API}/transcoded/${encodeURIComponent(relativePath)}`;
+    } else {
+        // For original files, use the standard endpoint
+        return `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+    }
+}
+
+async function playFile(filePath, originalPath = null, fileIndex = -1) {
     // originalPath is used for subtitle matching when playing transcoded files
     const subtitleMatchPath = originalPath || filePath;
 
-    // Determine if this is a transcoded file
+    // Find file info to check cloud upload status
+    const fileInfo = currentTorrentFiles.find(f => f.path === (originalPath || filePath));
+
+    // Check if file is uploaded to cloud and get signed URL
     let videoUrl;
-    if (filePath.endsWith('_transcoded.mp4')) {
-        // For transcoded files, use the transcoded endpoint
-        // Remove leading ./ or / from the path
-        let relativePath = filePath.replace(/^\.\/download\//, '').replace(/^\/download\//, '').replace(/^download\//, '');
-        videoUrl = `${TORRENT_API}/transcoded/${encodeURIComponent(relativePath)}`;
+    if (fileInfo && fileInfo.cloud_upload_status === 3 && fileInfo.cloud_path) {
+        // File is in cloud, get signed URL
+        const idx = fileIndex >= 0 ? fileIndex : currentTorrentFiles.indexOf(fileInfo);
+        try {
+            const cloudData = await apiRequest(`${TORRENT_API}/cloud-url/${currentInfoHash}/${idx}`);
+            videoUrl = cloudData.url;
+            console.log('Using cloud URL for playback');
+        } catch (error) {
+            console.warn('Failed to get cloud URL, falling back to local:', error);
+            // Fall back to local file
+            videoUrl = getLocalFileUrl(filePath);
+        }
     } else {
-        // For original files, use the standard endpoint
-        videoUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+        // Use local file
+        videoUrl = getLocalFileUrl(filePath);
     }
 
     // Clean up previous subtitle blob URL

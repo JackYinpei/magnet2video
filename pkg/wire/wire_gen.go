@@ -10,6 +10,7 @@ import (
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/ai"
 	"github.com/Done-0/gin-scaffold/internal/cache"
+	"github.com/Done-0/gin-scaffold/internal/cloud"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
@@ -25,11 +26,10 @@ import (
 
 // NewContainer initializes the complete application container using Wire
 func NewContainer(config *configs.Config) (*Container, error) {
-	manager, err := ai.New(config)
+	v, err := ai.New(config)
 	if err != nil {
 		return nil, err
 	}
-	databaseManager := db.New(config)
 	redisManager, err := redis.New(config)
 	if err != nil {
 		return nil, err
@@ -39,47 +39,42 @@ func NewContainer(config *configs.Config) (*Container, error) {
 		return nil, err
 	}
 	cacheManager := cache.New(redisManager, loggerManager)
+	v2 := cloud.New(config, loggerManager)
+	databaseManager := db.New(config)
 	i18nManager := i18n.New()
 	sseManager := sse.New(config)
 	torrentManager, err := torrent.New(config)
 	if err != nil {
 		return nil, err
 	}
-	queueProducer, err := queue.NewProducer(config)
+	producer, err := queue.NewProducer(config)
 	if err != nil {
 		return nil, err
 	}
-	testService := impl.NewTestService(loggerManager, redisManager, manager)
+	testService := impl.NewTestService(loggerManager, redisManager, v)
 	testController := controller.NewTestController(testService, sseManager)
 	torrentService := impl.NewTorrentService(loggerManager, databaseManager, torrentManager, cacheManager)
-	torrentController := controller.NewTorrentController(torrentService)
+	torrentController := controller.NewTorrentController(config, torrentService, databaseManager, v2)
 	userService := impl.NewUserService(loggerManager, databaseManager)
 	userController := controller.NewUserController(userService)
 	adminService := impl.NewAdminService(loggerManager, databaseManager, torrentManager)
 	adminController := controller.NewAdminController(adminService)
-	transcodeService := impl.NewTranscodeService(config, loggerManager, databaseManager, torrentManager, queueProducer)
-
-	// Connect TorrentService with TranscodeService for download completion callback
-	if ts, ok := torrentService.(*impl.TorrentServiceImpl); ok {
-		if tc, ok := transcodeService.(*impl.TranscodeServiceImpl); ok {
-			ts.SetTranscodeChecker(tc)
-		}
-	}
 	container := &Container{
-		Config:            config,
-		AIManager:         manager,
-		CacheManager:      cacheManager,
-		DatabaseManager:   databaseManager,
-		RedisManager:      redisManager,
-		LoggerManager:     loggerManager,
-		I18nManager:       i18nManager,
-		SSEManager:        sseManager,
-		TorrentManager:    torrentManager,
-		QueueProducer:     queueProducer,
-		TestController:    testController,
-		TorrentController: torrentController,
-		UserController:    userController,
-		AdminController:   adminController,
+		Config:              config,
+		AIManager:           v,
+		CacheManager:        cacheManager,
+		CloudStorageManager: v2,
+		DatabaseManager:     databaseManager,
+		RedisManager:        redisManager,
+		LoggerManager:       loggerManager,
+		I18nManager:         i18nManager,
+		SSEManager:          sseManager,
+		TorrentManager:      torrentManager,
+		QueueProducer:       producer,
+		TestController:      testController,
+		TorrentController:   torrentController,
+		UserController:      userController,
+		AdminController:     adminController,
 	}
 	return container, nil
 }
@@ -91,15 +86,16 @@ type Container struct {
 	Config *configs.Config
 
 	// Infrastructure
-	AIManager       *ai.AIManager
-	CacheManager    cache.CacheManager
-	DatabaseManager db.DatabaseManager
-	RedisManager    redis.RedisManager
-	LoggerManager   logger.LoggerManager
-	I18nManager     i18n.I18nManager
-	SSEManager      sse.SSEManager
-	TorrentManager  torrent.TorrentManager
-	QueueProducer   queue.Producer
+	AIManager           *ai.AIManager
+	CacheManager        cache.CacheManager
+	CloudStorageManager cloud.CloudStorageManager
+	DatabaseManager     db.DatabaseManager
+	RedisManager        redis.RedisManager
+	LoggerManager       logger.LoggerManager
+	I18nManager         i18n.I18nManager
+	SSEManager          sse.SSEManager
+	TorrentManager      torrent.TorrentManager
+	QueueProducer       queue.Producer
 
 	// Controllers
 	TestController    *controller.TestController

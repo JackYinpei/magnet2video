@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Done-0/gin-scaffold/configs"
+	cloudTypes "github.com/Done-0/gin-scaffold/internal/cloud/types"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/logger"
 	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
@@ -26,6 +29,7 @@ type TranscodeHandler struct {
 	loggerManager logger.LoggerManager
 	dbManager     db.DatabaseManager
 	ffmpeg        *ffmpeg.FFmpeg
+	queueProducer queue.Producer
 }
 
 // NewTranscodeHandler creates a new transcode handler
@@ -33,11 +37,13 @@ func NewTranscodeHandler(
 	config *configs.Config,
 	loggerManager logger.LoggerManager,
 	dbManager db.DatabaseManager,
+	queueProducer queue.Producer,
 ) *TranscodeHandler {
 	return &TranscodeHandler{
 		config:        config,
 		loggerManager: loggerManager,
 		dbManager:     dbManager,
+		queueProducer: queueProducer,
 		ffmpeg: ffmpeg.New(
 			config.TranscodeConfig.FFmpegPath,
 			config.TranscodeConfig.FFprobePath,
@@ -126,6 +132,12 @@ func (h *TranscodeHandler) Handle(ctx context.Context, msg *queue.Message) error
 
 	h.loggerManager.Logger().Infof("Transcode job completed: jobID=%d, duration=%dms, outputSize=%d",
 		transcodeMsg.JobID, duration, outputSize)
+
+	// Trigger cloud upload if enabled
+	if h.config.CloudStorageConfig.Enabled && outputInfo != nil {
+		h.queueCloudUpload(ctx, transcodeMsg.TorrentID, transcodeMsg.InfoHash, transcodeMsg.FileIndex,
+			transcodeMsg.OutputPath, outputInfo.Size(), true, transcodeMsg.CreatorID)
+	}
 
 	return nil
 }
@@ -281,4 +293,69 @@ func (h *TranscodeHandler) checkAndUpdateTorrentTranscodeStatus(torrentID int64)
 	}
 
 	return h.dbManager.DB().Save(&torrentRecord).Error
+}
+
+// queueCloudUpload sends a cloud upload job to the queue
+func (h *TranscodeHandler) queueCloudUpload(ctx context.Context, torrentID int64, infoHash string, fileIndex int, localPath string, fileSize int64, isTranscoded bool, creatorID int64) {
+	if h.queueProducer == nil {
+		return
+	}
+
+	// Build cloud path
+	pathPrefix := h.config.CloudStorageConfig.PathPrefix
+	if pathPrefix == "" {
+		pathPrefix = "torrents"
+	}
+	fileName := filepath.Base(localPath)
+	cloudPath := fmt.Sprintf("%s/%s/%s", pathPrefix, infoHash, fileName)
+
+	// Determine content type
+	contentType := "application/octet-stream"
+	ext := strings.ToLower(filepath.Ext(localPath))
+	if ext == ".mp4" {
+		contentType = "video/mp4"
+	}
+
+	// Update file cloud status to pending
+	h.updateTorrentFileCloudPending(torrentID, fileIndex)
+
+	msg := cloudTypes.CloudUploadMessage{
+		TorrentID:    torrentID,
+		InfoHash:     infoHash,
+		FileIndex:    fileIndex,
+		LocalPath:    localPath,
+		CloudPath:    cloudPath,
+		ContentType:  contentType,
+		FileSize:     fileSize,
+		IsTranscoded: isTranscoded,
+		CreatorID:    creatorID,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		h.loggerManager.Logger().Errorf("failed to marshal cloud upload message: %v", err)
+		return
+	}
+
+	if err := h.queueProducer.Send(ctx, cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
+		h.loggerManager.Logger().Errorf("failed to send cloud upload message: %v", err)
+	} else {
+		h.loggerManager.Logger().Infof("Queued cloud upload: torrentID=%d, fileIndex=%d, cloudPath=%s",
+			torrentID, fileIndex, cloudPath)
+	}
+}
+
+// updateTorrentFileCloudPending marks a file's cloud upload status as pending
+func (h *TranscodeHandler) updateTorrentFileCloudPending(torrentID int64, fileIndex int) {
+	var torrentRecord torrentModel.Torrent
+	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
+		return
+	}
+
+	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
+		torrentRecord.Files[fileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusPending
+		torrentRecord.TotalCloudUpload++
+	}
+
+	h.dbManager.DB().Save(&torrentRecord)
 }

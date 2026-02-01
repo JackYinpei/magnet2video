@@ -4,31 +4,49 @@
 package controller
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/Done-0/gin-scaffold/configs"
+	"github.com/Done-0/gin-scaffold/internal/cloud"
+	"github.com/Done-0/gin-scaffold/internal/db"
+	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
 	"github.com/Done-0/gin-scaffold/internal/types/errno"
 	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
 	"github.com/Done-0/gin-scaffold/internal/utils/validator"
 	"github.com/Done-0/gin-scaffold/internal/utils/vo"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
 	"github.com/Done-0/gin-scaffold/pkg/serve/service"
+	pkgVo "github.com/Done-0/gin-scaffold/pkg/vo"
 )
 
 // TorrentController torrent HTTP controller
 type TorrentController struct {
-	torrentService service.TorrentService
+	config              *configs.Config
+	torrentService      service.TorrentService
+	dbManager           db.DatabaseManager
+	cloudStorageManager cloud.CloudStorageManager
 }
 
 // NewTorrentController creates torrent controller
-func NewTorrentController(torrentService service.TorrentService) *TorrentController {
+func NewTorrentController(
+	config *configs.Config,
+	torrentService service.TorrentService,
+	dbManager db.DatabaseManager,
+	cloudStorageManager cloud.CloudStorageManager,
+) *TorrentController {
 	return &TorrentController{
-		torrentService: torrentService,
+		config:              config,
+		torrentService:      torrentService,
+		dbManager:           dbManager,
+		cloudStorageManager: cloudStorageManager,
 	}
 }
 
@@ -334,4 +352,64 @@ func getContentType(filePath string) string {
 		return ct
 	}
 	return "application/octet-stream"
+}
+
+// GetCloudURL handles generating a signed cloud URL for a file
+// @Router /api/v1/torrent/cloud-url/:info_hash/:file_index [get]
+func (tc *TorrentController) GetCloudURL(c *gin.Context) {
+	infoHash := c.Param("info_hash")
+	fileIndexStr := c.Param("file_index")
+
+	if infoHash == "" || fileIndexStr == "" {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "info_hash and file_index are required"))))
+		return
+	}
+
+	fileIndex, err := strconv.Atoi(fileIndexStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "invalid file_index"))))
+		return
+	}
+
+	// Check if cloud storage is enabled
+	if !tc.cloudStorageManager.IsEnabled() {
+		c.JSON(http.StatusServiceUnavailable, vo.Fail(c, nil, errorx.New(errno.ErrCloudStorageDisabled)))
+		return
+	}
+
+	// Get torrent record
+	var torrentRecord torrentModel.Torrent
+	if err := tc.dbManager.DB().Where("info_hash = ? AND deleted = ?", infoHash, false).First(&torrentRecord).Error; err != nil {
+		c.JSON(http.StatusNotFound, vo.Fail(c, nil, errorx.New(errno.ErrTorrentNotFound, errorx.KV("info_hash", infoHash))))
+		return
+	}
+
+	// Check file index
+	if fileIndex < 0 || fileIndex >= len(torrentRecord.Files) {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "file_index out of range"))))
+		return
+	}
+
+	file := torrentRecord.Files[fileIndex]
+
+	// Check if file is uploaded to cloud
+	if file.CloudUploadStatus != torrentModel.CloudUploadStatusCompleted || file.CloudPath == "" {
+		c.JSON(http.StatusNotFound, vo.Fail(c, nil, errorx.New(errno.ErrFileNotInCloud)))
+		return
+	}
+
+	// Generate signed URL
+	expiration := tc.cloudStorageManager.GetSignedURLExpiration()
+	signedURL, err := tc.cloudStorageManager.GenerateSignedURL(context.Background(), file.CloudPath, expiration)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, nil, errorx.New(errno.ErrSignedURLFailed, errorx.KV("msg", err.Error()))))
+		return
+	}
+
+	expiresAt := time.Now().Add(expiration).Unix()
+
+	c.JSON(http.StatusOK, vo.Success(c, pkgVo.CloudURLResponse{
+		URL:       signedURL,
+		ExpiresAt: expiresAt,
+	}))
 }

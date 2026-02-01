@@ -134,3 +134,14 @@ TORRENT:
   DOWNLOAD_RATE_LIMIT: 0          # 下载速度限制 (KB/s)，0=不限制
   ENABLE_SEEDING: true            # 是否启用做种
   LISTEN_PORT: 42069              # BT P2P 监听端口
+
+# ===========================================
+# 云存储配置 (可选)
+# ===========================================
+CLOUD_STORAGE:
+  ENABLED: false                                    # 是否启用云存储上传
+  PROVIDER: "gcs"                                   # 云存储提供商: gcs
+  CREDENTIALS_FILE: "./credentials/gcs-sa.json"    # GCS Service Account JSON 文件路径
+  BUCKET_NAME: "your-bucket-name"                  # GCS Bucket 名称
+  SIGNED_URL_EXPIRE_HOURS: 3                       # Signed URL 过期时间（小时）
+  PATH_PREFIX: "torrents"                          # 对象存储路径前缀

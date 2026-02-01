@@ -18,6 +18,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Done-0/gin-scaffold/configs"
+	"github.com/Done-0/gin-scaffold/internal/cloud"
+	cloudHandler "github.com/Done-0/gin-scaffold/internal/cloud/handler"
+	cloudTypes "github.com/Done-0/gin-scaffold/internal/cloud/types"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/middleware"
 	userModel "github.com/Done-0/gin-scaffold/internal/model/user"
@@ -79,6 +82,7 @@ func Start() {
 			cfgs,
 			container.LoggerManager,
 			container.DatabaseManager,
+			container.QueueProducer,
 		)
 
 		var err error
@@ -95,6 +99,40 @@ func Start() {
 
 		log.Println("Transcode Kafka consumer started")
 	}()
+
+	// Start cloud upload consumer (if cloud storage is enabled)
+	var cloudUploadConsumer queue.Consumer
+	if cfgs.CloudStorageConfig.Enabled {
+		go func() {
+			cloudStorageManager := cloud.New(cfgs, container.LoggerManager)
+			defer func() {
+				if cloudStorageManager != nil {
+					cloudStorageManager.Close()
+				}
+			}()
+
+			cloudUploadHandler := cloudHandler.NewCloudUploadHandler(
+				cfgs,
+				container.LoggerManager,
+				container.DatabaseManager,
+				cloudStorageManager,
+			)
+
+			var err error
+			cloudUploadConsumer, err = queue.NewConsumer(cfgs, cloudUploadHandler)
+			if err != nil {
+				log.Printf("Warning: Failed to create cloud upload consumer: %v", err)
+				return
+			}
+
+			if err := cloudUploadConsumer.Subscribe([]string{cloudTypes.TopicCloudUploadJobs}); err != nil {
+				log.Printf("Warning: Failed to subscribe to cloud upload topic: %v", err)
+				return
+			}
+
+			log.Println("Cloud upload consumer started")
+		}()
+	}
 
 	// Set Gin mode based on environment
 	env := os.Getenv("ENV")
@@ -140,6 +178,12 @@ func Start() {
 	if transcodeConsumer != nil {
 		transcodeConsumer.Close()
 		log.Println("Transcode consumer closed")
+	}
+
+	// Close cloud upload consumer
+	if cloudUploadConsumer != nil {
+		cloudUploadConsumer.Close()
+		log.Println("Cloud upload consumer closed")
 	}
 
 	// Graceful shutdown with timeout

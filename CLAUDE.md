@@ -18,6 +18,7 @@
 5. **流式播放**: HTTP Range 请求支持,实现视频拖拽和边下边播
 6. **权限控制**: JWT 认证 + 公开/私有种子分离
 7. **缓存优化**: Redis 缓存(Cache-Aside 模式) + 异步写入策略
+8. **云存储集成**: 支持 GCS/S3 云存储,自动上传转码文件,Signed URL 安全访问
 
 ---
 
@@ -85,6 +86,11 @@ magnet-video/
 ├── internal/                     # 核心基础设施层(不可被外部导入)
 │   ├── ai/                      # AI 服务集成(OpenAI/Gemini)
 │   ├── cache/                   # 缓存抽象层(基于 Redis)
+│   ├── cloud/                   # 云存储模块(GCS/S3)
+│   │   ├── cloud.go            # 工厂类和接口定义
+│   │   ├── internal/           # 具体实现(manager.go=GCS, s3_manager.go=S3)
+│   │   ├── handler/            # 云上传消息消费者
+│   │   └── types/              # 消息类型定义
 │   ├── db/                      # 数据库管理(GORM)
 │   ├── i18n/                    # 国际化管理
 │   ├── logger/                  # 日志管理(Logrus + 日志轮转)
@@ -166,6 +172,8 @@ flowchart TB
     DB[(GORM DB\nMySQL/Postgres/SQLite)]
     Redis[(Redis)]
     Cache["Cache Manager"]
+    Cloud["Cloud Storage\nGCS / S3"]
+    CloudConsumer["Cloud Upload Consumer"]
     TorrentMgr["Torrent Manager\nanacrolix/torrent"]
     Queue["Queue Producer\nGoChannel / RabbitMQ"]
     Consumer["Transcode Consumer\n(Handler)"]
@@ -179,6 +187,7 @@ flowchart TB
     P2P[(BT Swarm / Trackers)]
     MQ[(RabbitMQ 可选)]
     Disk[(Download Dir / Transcoded Files)]
+    CloudStorage[(GCS / S3 云存储)]
   end
 
   U --> Gin
@@ -193,6 +202,7 @@ flowchart TB
   Services --> TorrentMgr --> P2P
   Services --> Queue --> MQ
   Queue --> Consumer --> FFmpeg --> Disk
+  Consumer --> Cloud --> CloudConsumer --> CloudStorage
   TorrentMgr --> Disk
   Services --> SSE
   Services --> AI
@@ -264,8 +274,8 @@ flowchart TB
   - `Consumer`: 消息消费者接口
   - `Handler`: 消息处理器接口
   - `Message`: 通用消息结构(与实现无关)
-- **使用场景**: 转码任务异步处理
-- **Topic**: `transcode-jobs`
+- **使用场景**: 转码任务和云上传任务异步处理
+- **Topic**: `transcode-jobs`, `cloud-upload-jobs`
 - **消息格式**: 见 `internal/transcode/types/message.go`
 - **配置切换**: 通过 `QUEUE.TYPE` 配置选择实现(`channel` 或 `rabbitmq`)
 
@@ -292,6 +302,32 @@ flowchart TB
   5. `auth.JWTMiddleware()` - JWT 认证(保护路由)
   6. `auth.AdminMiddleware()` - 管理员权限校验
 
+##### 云存储模块 (`internal/cloud/`)
+- **职责**: 文件上传到云存储(GCS/S3),生成 Signed URL 安全访问
+- **支持的云服务商**:
+  - **Google Cloud Storage (GCS)**: `internal/cloud/internal/manager.go`
+  - **AWS S3 / MinIO**: `internal/cloud/internal/s3_manager.go`
+- **核心接口**: `CloudStorageManager`
+  - `Upload(ctx, objectPath, reader, contentType)`: 上传文件
+  - `UploadWithProgress(ctx, objectPath, reader, size, contentType, progressFn)`: 带进度回调上传
+  - `GenerateSignedURL(ctx, objectPath, expiration)`: 生成临时访问链接
+  - `Delete(ctx, objectPath)`: 删除云端文件
+  - `Exists(ctx, objectPath)`: 检查文件是否存在
+  - `IsEnabled()`: 检查云存储是否启用
+  - `GetSignedURLExpiration()`: 获取 Signed URL 过期时间
+- **消息队列**:
+  - **Topic**: `cloud-upload-jobs`
+  - **消息格式**: `internal/cloud/types/message.go`
+  - **消费者**: `internal/cloud/handler/cloud_upload_handler.go`
+- **工作流程**:
+  1. 转码完成(或非转码文件下载完成)
+  2. 发送 `CloudUploadMessage` 到消息队列
+  3. `CloudUploadHandler` 消费消息,调用 `CloudStorageManager.UploadWithProgress()`
+  4. 更新 `TorrentFile.CloudUploadStatus` 和 `CloudPath`
+  5. 前端请求 `/api/v1/torrent/cloud-url/:hash/:index` 获取 Signed URL
+  6. 客户端直接访问云存储播放视频
+- **配置**: 见下方 `CLOUD_STORAGE` 配置项
+
 #### 2. 数据模型层 (`internal/model/`)
 
 ##### Base 模型 (`internal/model/base/`)
@@ -312,25 +348,32 @@ type Base struct {
 ```go
 type Torrent struct {
     Base
-    InfoHash          string       // 种子哈希(唯一索引)
-    Name              string       // 种子名称
-    Files             TorrentFiles // 文件列表(JSON 序列化)
-    TotalSize         int64        // 总大小(字节)
-    Status            int          // 下载状态: 0=待下载,1=下载中,2=完成,3=失败,4=暂停
-    Progress          int          // 下载进度(0-100)
-    TranscodeStatus   int          // 转码状态: 0=未转码,1=转码中,2=完成,3=失败
-    TranscodeProgress int          // 转码进度(0-100)
-    IsPublic          bool         // 是否公开分享
-    UserID            int64        // 所属用户 ID
+    InfoHash            string       // 种子哈希(唯一索引)
+    Name                string       // 种子名称
+    Files               TorrentFiles // 文件列表(JSON 序列化)
+    TotalSize           int64        // 总大小(字节)
+    Status              int          // 下载状态: 0=待下载,1=下载中,2=完成,3=失败,4=暂停
+    Progress            int          // 下载进度(0-100)
+    TranscodeStatus     int          // 转码状态: 0=未转码,1=转码中,2=完成,3=失败
+    TranscodeProgress   int          // 转码进度(0-100)
+    IsPublic            bool         // 是否公开分享
+    UserID              int64        // 所属用户 ID
+    CloudUploadStatus   int          // 云上传整体状态
+    CloudUploadProgress int          // 云上传进度(0-100)
+    CloudUploadedCount  int          // 已上传文件数
+    TotalCloudUpload    int          // 总上传文件数
 }
 
 type TorrentFile struct {
-    Path            string // 文件相对路径
-    Size            int64  // 文件大小
-    IsSelected      bool   // 是否下载
-    IsStreamable    bool   // 是否可流式播放(视频/音频)
-    TranscodeStatus int    // 文件转码状态
-    TranscodedPath  string // 转码后文件路径
+    Path              string // 文件相对路径
+    Size              int64  // 文件大小
+    IsSelected        bool   // 是否下载
+    IsStreamable      bool   // 是否可流式播放(视频/音频)
+    TranscodeStatus   int    // 文件转码状态
+    TranscodedPath    string // 转码后文件路径
+    CloudUploadStatus int    // 云上传状态: 0=无, 1=待上传, 2=上传中, 3=完成, 4=失败
+    CloudPath         string // 云存储对象路径
+    CloudUploadError  string // 云上传失败错误信息
 }
 ```
 
@@ -398,6 +441,8 @@ erDiagram
     bool is_streamable
     int transcode_status
     string transcoded_path
+    int cloud_upload_status
+    string cloud_path
   }
 
   TRANSCODE_JOB {
@@ -453,6 +498,7 @@ Database/TorrentManager/QueueProducer
 - `ServeFile`: 流式传输文件(支持 Range 请求,实现视频拖拽)
 - `ServeTranscodedFile`: 服务转码后文件
 - `RequestTranscode`: 手动触发转码
+- `GetCloudURL`: 获取云存储 Signed URL
 
 **UserController** (`pkg/serve/controller/user_controller.go`)
 - `Register`: 用户注册
@@ -486,6 +532,7 @@ GET  /api/v1/torrent/public               # 浏览公开种子
 GET  /api/v1/torrent/detail/:hash         # 种子详情
 GET  /api/v1/torrent/file/:hash/*path     # 流式播放(支持 Range)
 GET  /api/v1/torrent/transcoded/*path     # 转码文件服务
+GET  /api/v1/torrent/cloud-url/:hash/:idx # 获取云存储 Signed URL
 POST /api/v1/user/register                # 用户注册
 POST /api/v1/user/login                   # 用户登录
 ```
@@ -559,11 +606,12 @@ pkg/wire/
 ```go
 type Container struct {
     // 基础设施管理器
-    DatabaseManager    db.DatabaseManager
-    RedisManager       redis.RedisManager
-    LoggerManager      logger.LoggerManager
-    TorrentManager     torrent.TorrentManager
-    QueueProducer      queue.QueueProducer
+    DatabaseManager      db.DatabaseManager
+    RedisManager         redis.RedisManager
+    LoggerManager        logger.LoggerManager
+    TorrentManager       torrent.TorrentManager
+    QueueProducer        queue.QueueProducer
+    CloudStorageManager  cloud.CloudStorageManager
 
     // 业务控制器
     TorrentController  controller.TorrentController
@@ -633,11 +681,13 @@ cd pkg/wire && wire
 
 5. **启动转码消费者** (后台 goroutine)
 
-6. **注册中间件和路由**
+6. **启动云上传消费者** (如果启用云存储,后台 goroutine)
 
-7. **启动 HTTP 服务器** (端口 8080)
+7. **注册中间件和路由**
 
-8. **监听信号优雅关闭** (SIGINT/SIGTERM)
+8. **启动 HTTP 服务器** (端口 8080)
+
+9. **监听信号优雅关闭** (SIGINT/SIGTERM)
    - 15 秒超时
    - 关闭所有管理器(释放资源)
 
@@ -648,6 +698,7 @@ defer func() {
     container.DatabaseManager.Close()
     container.RedisManager.Close()
     container.TorrentManager.Close()
+    container.CloudStorageManager.Close()
 }()
 ```
 
@@ -666,8 +717,10 @@ sequenceDiagram
   participant DB as 数据库
   participant Q as 队列(GoChannel/RabbitMQ)
   participant C as Transcode Consumer
+  participant CC as Cloud Consumer
   participant FF as FFmpeg/FFprobe
   participant FS as 下载目录
+  participant Cloud as 云存储(GCS/S3)
 
   U->>UI: 提交磁力链
   UI->>API: POST /api/v1/torrent/parse
@@ -694,11 +747,18 @@ sequenceDiagram
   FF->>FS: 输出 _transcoded.mp4
   C->>DB: 更新转码进度/状态
 
+  Note over C,Cloud: 转码完成后触发云上传
+  C->>Q: 发送 CloudUploadMessage
+  Q->>CC: 消费云上传任务
+  CC->>Cloud: 上传文件
+  CC->>DB: 更新云上传状态
+
   U->>UI: 播放视频
-  UI->>API: GET /api/v1/torrent/file 或 /transcoded
-  API->>TM: 读取原始文件 (Range)
-  API->>FS: 或读取转码文件
-  API-->>UI: 流式播放
+  UI->>API: GET /api/v1/torrent/cloud-url/:hash/:idx
+  API->>Cloud: GenerateSignedURL
+  Cloud-->>API: Signed URL
+  API-->>UI: 返回云链接
+  UI->>Cloud: 直接访问云存储播放
 ```
 
 ### BT 下载流程
@@ -734,21 +794,44 @@ sequenceDiagram
    ↓
 6. 更新 TranscodeJob 和 Torrent 状态
    ↓
-7. 转码完成 → 文件可播放
+7. 转码完成 → 触发云上传(如果启用)
+```
+
+### 云上传流程
+
+```
+1. 转码完成(或非转码文件下载完成)
+   ↓
+2. 发送 CloudUploadMessage 到消息队列 (cloud-upload-jobs)
+   ↓
+3. CloudUploadHandler 消费消息
+   ↓
+4. 更新文件状态为 uploading
+   ↓
+5. CloudStorageManager.UploadWithProgress() 上传到 GCS/S3
+   ↓
+6. 更新 TorrentFile.CloudUploadStatus = completed, 保存 CloudPath
+   ↓
+7. 更新 Torrent 整体上传进度
 ```
 
 ### 文件播放流程
 
 ```
-1. 前端请求视频文件(ServeFile 或 ServeTranscodedFile)
+1. 前端请求视频文件
    ↓
-2. 验证权限(公开种子或本人种子)
+2. 检查文件是否已上传到云存储
    ↓
-3. 获取文件 Reader(支持模糊匹配)
+3a. 已上传云 → 请求 /cloud-url/:hash/:idx → 获取 Signed URL → 直接访问云存储
+3b. 未上传云 → 使用本地文件(ServeFile 或 ServeTranscodedFile)
    ↓
-4. http.ServeContent 处理 Range 请求
+4. 验证权限(公开种子或本人种子)
    ↓
-5. 流式传输视频数据
+5. 获取文件 Reader(支持模糊匹配)
+   ↓
+6. http.ServeContent 处理 Range 请求
+   ↓
+7. 流式传输视频数据
 ```
 
 ---
@@ -806,6 +889,20 @@ AI:
         API_KEY: "sk-..."
         MODEL: "gpt-4"
         RATE_LIMIT: "60/min"
+
+CLOUD_STORAGE:
+  ENABLED: true                           # 是否启用云存储上传
+  PROVIDER: "gcs"                         # 云存储提供商: "gcs" 或 "s3"
+  BUCKET_NAME: "my-bucket"                # Bucket 名称
+  SIGNED_URL_EXPIRE_HOURS: 3              # Signed URL 过期时间(小时)
+  PATH_PREFIX: "torrents"                 # 对象路径前缀
+  # GCS 专用
+  CREDENTIALS_FILE: "./gcs-sa.json"       # GCS Service Account JSON 文件
+  # S3 专用
+  REGION: "us-east-1"                     # AWS 区域
+  ACCESS_KEY_ID: "AKIA..."                # AWS Access Key
+  SECRET_ACCESS_KEY: "..."                # AWS Secret Key
+  ENDPOINT: ""                            # 自定义端点(MinIO 等)
 ```
 
 ### 访问配置
@@ -840,6 +937,7 @@ configs.UpdateField("APP.APP_PORT", "9090")
 | Torrent 模块 | 20100-20199 | 20110 |
 | 转码模块   | 20200-20299  | 20203  |
 | 管理员模块 | 20300-20399  | 20301  |
+| 云存储模块 | 20400-20499  | 20404  |
 
 详见 `internal/types/errno/` 目录下的错误码定义。
 
@@ -1201,13 +1299,14 @@ docker-compose down
 1. **完整的企业级架构**: 分层清晰,高内聚低耦合
 2. **视频在线播放**: 自动转码为浏览器兼容格式(类 Netflix 体验)
 3. **异步转码系统**: 消息队列解耦,支持 GoChannel(开发) 和 RabbitMQ(生产)
-4. **依赖注入**: Wire 编译时注入,避免反射开销
-5. **缓存策略**: Cache-Aside 模式 + 异步写入
-6. **流式传输**: 支持 HTTP Range 请求,实现视频拖拽和边下边播
-7. **权限系统**: 公开/私有种子分离,JWT 保护
-8. **雪花 ID**: 分布式 ID 生成,支持高并发
-9. **优雅关闭**: 15 秒超时,释放所有资源
-10. **完善文档**: CLAUDE.md、coding-standards、API 文档
+4. **云存储集成**: 支持 GCS/S3,自动上传转码文件,Signed URL 安全访问
+5. **依赖注入**: Wire 编译时注入,避免反射开销
+6. **缓存策略**: Cache-Aside 模式 + 异步写入
+7. **流式传输**: 支持 HTTP Range 请求,实现视频拖拽和边下边播
+8. **权限系统**: 公开/私有种子分离,JWT 保护
+9. **雪花 ID**: 分布式 ID 生成,支持高并发
+10. **优雅关闭**: 15 秒超时,释放所有资源
+11. **完善文档**: CLAUDE.md、coding-standards、API 文档
 
 ---
 
@@ -1239,5 +1338,5 @@ docker-compose down
 
 ---
 
-**最后更新**: 2025-01-30
+**最后更新**: 2025-02-01
 **维护者**: Done-0

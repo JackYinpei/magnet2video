@@ -8,6 +8,7 @@ import (
 
 	"github.com/Done-0/gin-scaffold/internal/ai"
 	"github.com/Done-0/gin-scaffold/internal/cache"
+	"github.com/Done-0/gin-scaffold/internal/cloud"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/i18n"
 	"github.com/Done-0/gin-scaffold/internal/logger"
@@ -24,6 +25,7 @@ import (
 var InfrastructureProviders = wire.NewSet(
 	ai.New,
 	cache.New,
+	cloud.New,
 	db.New,
 	logger.New,
 	i18n.New,
