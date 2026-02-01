@@ -27,7 +27,6 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/transcode/ffmpeg"
 	"github.com/Done-0/gin-scaffold/internal/transcode/types"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
-	"github.com/Done-0/gin-scaffold/pkg/serve/service"
 	"github.com/Done-0/gin-scaffold/pkg/vo"
 )
 
@@ -48,7 +47,7 @@ func NewTranscodeService(
 	dbManager db.DatabaseManager,
 	torrentManager torrent.TorrentManager,
 	queueProducer queue.Producer,
-) service.TranscodeService {
+) *TranscodeServiceImpl {
 	return &TranscodeServiceImpl{
 		config:         config,
 		loggerManager:  loggerManager,

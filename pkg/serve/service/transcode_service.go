@@ -10,8 +10,15 @@ import (
 	"github.com/Done-0/gin-scaffold/pkg/vo"
 )
 
+// TranscodeChecker interface for triggering transcode check
+type TranscodeChecker interface {
+	TriggerTranscodeCheck(torrentID int64)
+}
+
 // TranscodeService defines the interface for transcode operations
 type TranscodeService interface {
+	TranscodeChecker
+
 	// CheckAndQueueTranscode checks a torrent for files that need transcoding and queues jobs
 	CheckAndQueueTranscode(c *gin.Context, torrentID int64) error
 

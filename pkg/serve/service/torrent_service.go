@@ -14,6 +14,8 @@ import (
 
 // TorrentService torrent service interface
 type TorrentService interface {
+	// SetTranscodeChecker sets the transcode checker for triggering transcode after download completes
+	SetTranscodeChecker(checker TranscodeChecker)
 	// ParseMagnet parses a magnet URI and returns available files
 	ParseMagnet(c *gin.Context, req *dto.ParseMagnetRequest) (*vo.ParseMagnetResponse, error)
 	// StartDownload starts downloading selected files

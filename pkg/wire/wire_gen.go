@@ -19,6 +19,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/sse"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller"
+	"github.com/Done-0/gin-scaffold/pkg/serve/service"
 	"github.com/Done-0/gin-scaffold/pkg/serve/service/impl"
 )
 
@@ -53,12 +54,13 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	}
 	testService := impl.NewTestService(loggerManager, redisManager, v)
 	testController := controller.NewTestController(testService, sseManager)
-	torrentService := impl.NewTorrentService(loggerManager, databaseManager, torrentManager, cacheManager)
-	torrentController := controller.NewTorrentController(config, torrentService, databaseManager, v2)
+	torrentServiceImpl := impl.NewTorrentService(loggerManager, databaseManager, torrentManager, cacheManager)
+	torrentController := controller.NewTorrentController(config, torrentServiceImpl, databaseManager, v2)
 	userService := impl.NewUserService(loggerManager, databaseManager)
 	userController := controller.NewUserController(userService)
 	adminService := impl.NewAdminService(loggerManager, databaseManager, torrentManager)
 	adminController := controller.NewAdminController(adminService)
+	transcodeServiceImpl := impl.NewTranscodeService(config, loggerManager, databaseManager, torrentManager, producer)
 	container := &Container{
 		Config:              config,
 		AIManager:           v,
@@ -75,6 +77,8 @@ func NewContainer(config *configs.Config) (*Container, error) {
 		TorrentController:   torrentController,
 		UserController:      userController,
 		AdminController:     adminController,
+		TorrentService:      torrentServiceImpl,
+		TranscodeService:    transcodeServiceImpl,
 	}
 	return container, nil
 }
@@ -102,4 +106,8 @@ type Container struct {
 	TorrentController *controller.TorrentController
 	UserController    *controller.UserController
 	AdminController   *controller.AdminController
+
+	// Services
+	TorrentService   service.TorrentService
+	TranscodeService service.TranscodeService
 }

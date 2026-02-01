@@ -21,6 +21,7 @@ import (
 
 	"github.com/Done-0/gin-scaffold/internal/redis"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller"
+	"github.com/Done-0/gin-scaffold/pkg/serve/service"
 )
 
 // Container holds all application dependencies
@@ -46,8 +47,8 @@ type Container struct {
 	AdminController   *controller.AdminController
 
 	// Services
-
-	// mappers
+	TorrentService   service.TorrentService
+	TranscodeService service.TranscodeService
 }
 
 // NewContainer initializes the complete application container using Wire

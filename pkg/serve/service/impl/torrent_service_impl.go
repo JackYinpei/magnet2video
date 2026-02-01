@@ -29,12 +29,7 @@ type TorrentServiceImpl struct {
 	dbManager        db.DatabaseManager
 	torrentManager   torrent.TorrentManager
 	cacheManager     cache.CacheManager
-	transcodeChecker TranscodeChecker // Lazy-loaded to avoid circular dependency
-}
-
-// TranscodeChecker interface for triggering transcode check
-type TranscodeChecker interface {
-	TriggerTranscodeCheck(torrentID int64)
+	transcodeChecker service.TranscodeChecker // Lazy-loaded to avoid circular dependency
 }
 
 // NewTorrentService creates torrent service implementation
@@ -43,7 +38,7 @@ func NewTorrentService(
 	dbManager db.DatabaseManager,
 	torrentManager torrent.TorrentManager,
 	cacheManager cache.CacheManager,
-) service.TorrentService {
+) *TorrentServiceImpl {
 	instance := &TorrentServiceImpl{
 		loggerManager:  loggerManager,
 		dbManager:      dbManager,
@@ -58,7 +53,7 @@ func NewTorrentService(
 }
 
 // SetTranscodeChecker sets the transcode checker (called after all services are created)
-func (ts *TorrentServiceImpl) SetTranscodeChecker(checker TranscodeChecker) {
+func (ts *TorrentServiceImpl) SetTranscodeChecker(checker service.TranscodeChecker) {
 	ts.transcodeChecker = checker
 
 	// Check completed torrents that haven't been checked for transcoding yet

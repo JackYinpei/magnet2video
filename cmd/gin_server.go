@@ -75,7 +75,11 @@ func Start() {
 	// Close queue producer on shutdown
 	defer container.QueueProducer.Close()
 
-	// Start transcode Kafka consumer
+	// Connect TorrentService with TranscodeService for auto-triggering transcode after download
+	container.TorrentService.SetTranscodeChecker(container.TranscodeService)
+	log.Println("TranscodeChecker connected to TorrentService")
+
+	// Start transcode consumer
 	var transcodeConsumer queue.Consumer
 	go func() {
 		transcodeHandler := handler.NewTranscodeHandler(
@@ -97,7 +101,7 @@ func Start() {
 			return
 		}
 
-		log.Println("Transcode Kafka consumer started")
+		log.Printf("Transcode consumer started (queue type: %s)", cfgs.QueueConfig.Type)
 	}()
 
 	// Start cloud upload consumer (if cloud storage is enabled)

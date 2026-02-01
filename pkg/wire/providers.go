@@ -18,6 +18,7 @@ import (
 
 	"github.com/Done-0/gin-scaffold/internal/redis"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller"
+	"github.com/Done-0/gin-scaffold/pkg/serve/service"
 	"github.com/Done-0/gin-scaffold/pkg/serve/service/impl"
 )
 
@@ -42,9 +43,11 @@ var MapperProviders = wire.NewSet()
 var ServiceProviders = wire.NewSet(
 	impl.NewTestService,
 	impl.NewTorrentService,
+	wire.Bind(new(service.TorrentService), new(*impl.TorrentServiceImpl)),
 	impl.NewUserService,
 	impl.NewAdminService,
 	impl.NewTranscodeService,
+	wire.Bind(new(service.TranscodeService), new(*impl.TranscodeServiceImpl)),
 )
 
 // ControllerProviders provides controller layer dependencies
