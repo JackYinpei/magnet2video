@@ -484,6 +484,20 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 
 	files := make([]vo.TorrentFileInfo, len(t.Files))
 	for i, f := range t.Files {
+		// Convert subtitles
+		subtitles := make([]vo.SubtitleVO, len(f.Subtitles))
+		for j, sub := range f.Subtitles {
+			subtitles[j] = vo.SubtitleVO{
+				Language:     sub.Language,
+				LanguageName: sub.LanguageName,
+				Title:        sub.Title,
+				Format:       sub.Format,
+				FilePath:     sub.FilePath,
+				CloudPath:    sub.CloudPath,
+				FileSize:     sub.FileSize,
+			}
+		}
+
 		files[i] = vo.TorrentFileInfo{
 			Index:           i,
 			Path:            f.Path,
@@ -492,6 +506,7 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 			IsStreamable:    f.IsStreamable,
 			TranscodeStatus: f.TranscodeStatus,
 			TranscodedPath:  f.TranscodedPath,
+			Subtitles:       subtitles,
 		}
 	}
 

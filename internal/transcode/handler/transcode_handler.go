@@ -76,6 +76,9 @@ func (h *TranscodeHandler) Handle(ctx context.Context, msg *queue.Message) error
 		return fmt.Errorf("input file not found: %s", transcodeMsg.InputPath)
 	}
 
+	// Extract subtitles before transcoding
+	subtitleResults := h.extractSubtitles(ctx, transcodeMsg)
+
 	// Progress callback to update database
 	progressCallback := func(progress float64) {
 		h.updateJobProgress(transcodeMsg.JobID, int(progress))
@@ -123,6 +126,11 @@ func (h *TranscodeHandler) Handle(ctx context.Context, msg *queue.Message) error
 	// Update torrent file with transcoded path
 	if err := h.updateTorrentFileTranscoded(transcodeMsg.TorrentID, transcodeMsg.FileIndex, transcodeMsg.OutputPath); err != nil {
 		h.loggerManager.Logger().Errorf("failed to update torrent file: %v", err)
+	}
+
+	// Save subtitle info to database and queue cloud uploads
+	if len(subtitleResults) > 0 {
+		h.saveSubtitleInfo(transcodeMsg, subtitleResults)
 	}
 
 	// Update overall torrent transcode status
@@ -358,4 +366,103 @@ func (h *TranscodeHandler) updateTorrentFileCloudPending(torrentID int64, fileIn
 	}
 
 	h.dbManager.DB().Save(&torrentRecord)
+}
+
+// extractSubtitles extracts subtitle streams from the input video file
+func (h *TranscodeHandler) extractSubtitles(ctx context.Context, msg types.TranscodeMessage) []ffmpeg.SubtitleExtractResult {
+	outputDir := filepath.Dir(msg.OutputPath)
+	baseName := strings.TrimSuffix(filepath.Base(msg.InputPath), filepath.Ext(msg.InputPath))
+
+	results, err := h.ffmpeg.ExtractSubtitles(ctx, msg.InputPath, outputDir, baseName)
+	if err != nil {
+		h.loggerManager.Logger().Warnf("Failed to extract subtitles for jobID=%d: %v", msg.JobID, err)
+		return nil
+	}
+
+	if len(results) > 0 {
+		h.loggerManager.Logger().Infof("Extracted %d subtitle(s) for jobID=%d", len(results), msg.JobID)
+	}
+
+	return results
+}
+
+// saveSubtitleInfo saves extracted subtitle info to the torrent record and queues cloud uploads
+func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results []ffmpeg.SubtitleExtractResult) {
+	var torrentRecord torrentModel.Torrent
+	if err := h.dbManager.DB().Where("id = ?", msg.TorrentID).First(&torrentRecord).Error; err != nil {
+		h.loggerManager.Logger().Errorf("failed to load torrent for subtitle update: %v", err)
+		return
+	}
+
+	if msg.FileIndex < 0 || msg.FileIndex >= len(torrentRecord.Files) {
+		return
+	}
+
+	var subtitles []torrentModel.SubtitleInfo
+	for _, r := range results {
+		subtitles = append(subtitles, torrentModel.SubtitleInfo{
+			StreamIndex:   r.StreamIndex,
+			Language:      r.Language,
+			LanguageName:  r.LanguageName,
+			Title:         r.Title,
+			Format:        r.Format,
+			OriginalCodec: r.OriginalCodec,
+			FilePath:      r.FilePath,
+			FileSize:      r.FileSize,
+		})
+
+		// Queue cloud upload for each subtitle file
+		if h.config.CloudStorageConfig.Enabled && h.queueProducer != nil {
+			h.queueSubtitleCloudUpload(context.Background(), msg, r)
+		}
+	}
+
+	torrentRecord.Files[msg.FileIndex].Subtitles = subtitles
+	if err := h.dbManager.DB().Save(&torrentRecord).Error; err != nil {
+		h.loggerManager.Logger().Errorf("failed to save subtitle info: %v", err)
+	}
+}
+
+// queueSubtitleCloudUpload sends a cloud upload job for a subtitle file
+func (h *TranscodeHandler) queueSubtitleCloudUpload(ctx context.Context, msg types.TranscodeMessage, result ffmpeg.SubtitleExtractResult) {
+	pathPrefix := h.config.CloudStorageConfig.PathPrefix
+	if pathPrefix == "" {
+		pathPrefix = "torrents"
+	}
+	fileName := filepath.Base(result.FilePath)
+	cloudPath := fmt.Sprintf("%s/%s/%s", pathPrefix, msg.InfoHash, fileName)
+
+	contentType := "text/plain"
+	switch result.Format {
+	case "srt":
+		contentType = "application/x-subrip"
+	case "ass":
+		contentType = "text/x-ssa"
+	case "vtt":
+		contentType = "text/vtt"
+	}
+
+	uploadMsg := cloudTypes.CloudUploadMessage{
+		TorrentID:    msg.TorrentID,
+		InfoHash:     msg.InfoHash,
+		FileIndex:    msg.FileIndex,
+		LocalPath:    result.FilePath,
+		CloudPath:    cloudPath,
+		ContentType:  contentType,
+		FileSize:     result.FileSize,
+		IsTranscoded: false,
+		CreatorID:    msg.CreatorID,
+	}
+
+	msgBytes, err := json.Marshal(uploadMsg)
+	if err != nil {
+		h.loggerManager.Logger().Errorf("failed to marshal subtitle cloud upload message: %v", err)
+		return
+	}
+
+	if err := h.queueProducer.Send(ctx, cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
+		h.loggerManager.Logger().Errorf("failed to send subtitle cloud upload message: %v", err)
+	} else {
+		h.loggerManager.Logger().Infof("Queued subtitle cloud upload: %s", cloudPath)
+	}
 }

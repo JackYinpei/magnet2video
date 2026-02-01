@@ -11,6 +11,19 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/model/base"
 )
 
+// SubtitleInfo represents an extracted subtitle file associated with a torrent file
+type SubtitleInfo struct {
+	StreamIndex   int    `json:"stream_index"`    // FFmpeg stream index
+	Language      string `json:"language"`         // ISO 639-2 language code (eng, chi, jpn)
+	LanguageName  string `json:"language_name"`    // Human-readable name (English, Chinese)
+	Title         string `json:"title"`            // Subtitle title/label
+	Format        string `json:"format"`           // Output format: srt, ass, vtt
+	OriginalCodec string `json:"original_codec"`   // Original codec: subrip, ass, mov_text
+	FilePath      string `json:"file_path"`        // Local file path
+	CloudPath     string `json:"cloud_path"`       // Cloud storage object path
+	FileSize      int64  `json:"file_size"`        // File size in bytes
+}
+
 // TorrentFile represents a single file in a torrent
 type TorrentFile struct {
 	Path            string `json:"path"`             // File path within the torrent
@@ -26,6 +39,9 @@ type TorrentFile struct {
 	CloudUploadStatus int    `json:"cloud_upload_status"` // Cloud upload status: 0=none, 1=pending, 2=uploading, 3=completed, 4=failed
 	CloudPath         string `json:"cloud_path"`          // Cloud storage object path
 	CloudUploadError  string `json:"cloud_upload_error"`  // Cloud upload error message if failed
+
+	// Subtitle fields
+	Subtitles []SubtitleInfo `json:"subtitles"` // Extracted subtitle files
 }
 
 // Transcode status constants for TorrentFile

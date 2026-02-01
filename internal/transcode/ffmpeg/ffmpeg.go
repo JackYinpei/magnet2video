@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -61,12 +62,17 @@ func New(ffmpegPath, ffprobePath string) *FFmpeg {
 // ffprobeOutput represents the JSON output structure from ffprobe
 type ffprobeOutput struct {
 	Streams []struct {
+		Index      int    `json:"index"`
 		CodecType  string `json:"codec_type"`
 		CodecName  string `json:"codec_name"`
 		Width      int    `json:"width"`
 		Height     int    `json:"height"`
 		RFrameRate string `json:"r_frame_rate"`
 		BitRate    string `json:"bit_rate"`
+		Tags       struct {
+			Language string `json:"language"`
+			Title    string `json:"title"`
+		} `json:"tags"`
 	} `json:"streams"`
 	Format struct {
 		Duration string `json:"duration"`
@@ -180,10 +186,11 @@ func (f *FFmpeg) Remux(ctx context.Context, inputPath, outputPath string, callba
 
 	args := []string{
 		"-i", inputPath,
-		"-map", "0",             // Copy ALL streams (video, audio, subtitles)
-		"-c:v", "copy",          // Copy video without re-encoding
-		"-c:a", "aac",           // Convert audio to AAC for browser compatibility
-		"-b:a", "192k",          // Audio bitrate
+		"-map", "0:v:0",          // Map first video stream only
+		"-map", "0:a?",           // Map all audio streams (optional)
+		"-c:v", "copy",           // Copy video without re-encoding
+		"-c:a", "aac",            // Convert audio to AAC for browser compatibility
+		"-b:a", "192k",           // Audio bitrate
 		"-movflags", "+faststart", // Enable fast start for web playback
 		"-y", // Overwrite output
 		"-progress", "pipe:1", // Output progress to stdout
@@ -210,6 +217,8 @@ func (f *FFmpeg) Transcode(ctx context.Context, inputPath, outputPath string, pr
 
 	args := []string{
 		"-i", inputPath,
+		"-map", "0:v:0",  // Map first video stream only
+		"-map", "0:a?",   // Map all audio streams (optional)
 		"-c:v", "libx264", // H.264 video codec
 		"-preset", preset, // Encoding preset (ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
 		"-crf", strconv.Itoa(crf), // Constant Rate Factor (0-51, lower = better quality)
@@ -339,4 +348,186 @@ func NeedsTranscoding(path string) bool {
 		".3gp":  true,
 	}
 	return needsTranscode[ext]
+}
+
+// SubtitleStream represents a subtitle stream detected in a video file
+type SubtitleStream struct {
+	Index     int    // FFmpeg stream index
+	CodecName string // Codec name (subrip, ass, mov_text, etc.)
+	Language  string // ISO 639-2 language code (eng, chi, jpn)
+	Title     string // Subtitle title/label
+}
+
+// SubtitleExtractResult represents an extracted subtitle file
+type SubtitleExtractResult struct {
+	StreamIndex   int    // Original FFmpeg stream index
+	Language      string // ISO 639-2 language code
+	LanguageName  string // Human-readable language name
+	Title         string // Subtitle title
+	Format        string // Output format (srt, ass, vtt)
+	OriginalCodec string // Original codec name
+	FilePath      string // Extracted file path
+	FileSize      int64  // File size in bytes
+}
+
+// languageCodeMap maps ISO 639-2 language codes to human-readable names
+var languageCodeMap = map[string]string{
+	"eng": "English", "chi": "Chinese", "zho": "Chinese",
+	"jpn": "Japanese", "kor": "Korean", "spa": "Spanish",
+	"fre": "French", "fra": "French", "ger": "German",
+	"deu": "German", "ita": "Italian", "por": "Portuguese",
+	"rus": "Russian", "ara": "Arabic", "hin": "Hindi",
+	"tha": "Thai", "vie": "Vietnamese", "ind": "Indonesian",
+	"may": "Malay", "msa": "Malay", "tur": "Turkish",
+	"pol": "Polish", "nld": "Dutch", "dut": "Dutch",
+	"swe": "Swedish", "nor": "Norwegian", "dan": "Danish",
+	"fin": "Finnish", "ces": "Czech", "cze": "Czech",
+	"hun": "Hungarian", "ron": "Romanian", "rum": "Romanian",
+	"bul": "Bulgarian", "hrv": "Croatian", "srp": "Serbian",
+	"slk": "Slovak", "slo": "Slovak", "slv": "Slovenian",
+	"ukr": "Ukrainian", "heb": "Hebrew", "und": "Unknown",
+}
+
+// GetLanguageName converts ISO 639-2 language code to human-readable name
+func GetLanguageName(code string) string {
+	if name, ok := languageCodeMap[strings.ToLower(code)]; ok {
+		return name
+	}
+	if code == "" {
+		return "Unknown"
+	}
+	return code
+}
+
+// getSubtitleExtension returns the file extension for a subtitle codec
+func getSubtitleExtension(codec string) string {
+	switch strings.ToLower(codec) {
+	case "subrip", "srt":
+		return "srt"
+	case "ass", "ssa":
+		return "ass"
+	case "webvtt", "vtt":
+		return "vtt"
+	case "mov_text", "tx3g":
+		return "srt"
+	default:
+		return "srt"
+	}
+}
+
+// ProbeSubtitles detects subtitle streams in a video file
+func (f *FFmpeg) ProbeSubtitles(ctx context.Context, inputPath string) ([]SubtitleStream, error) {
+	args := []string{
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_streams",
+		"-select_streams", "s",
+		inputPath,
+	}
+
+	cmd := exec.CommandContext(ctx, f.ffprobePath, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe subtitle detection failed: %w", err)
+	}
+
+	var probeOutput ffprobeOutput
+	if err := json.Unmarshal(output, &probeOutput); err != nil {
+		return nil, fmt.Errorf("failed to parse ffprobe output: %w", err)
+	}
+
+	var subtitles []SubtitleStream
+	for _, stream := range probeOutput.Streams {
+		subtitles = append(subtitles, SubtitleStream{
+			Index:     stream.Index,
+			CodecName: stream.CodecName,
+			Language:  stream.Tags.Language,
+			Title:     stream.Tags.Title,
+		})
+	}
+
+	return subtitles, nil
+}
+
+// ExtractSubtitles extracts all subtitle streams from a video file to separate files
+func (f *FFmpeg) ExtractSubtitles(ctx context.Context, inputPath, outputDir, baseName string) ([]SubtitleExtractResult, error) {
+	subtitleStreams, err := f.ProbeSubtitles(ctx, inputPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(subtitleStreams) == 0 {
+		return nil, nil
+	}
+
+	var results []SubtitleExtractResult
+	langCount := make(map[string]int)
+
+	for _, stream := range subtitleStreams {
+		ext := getSubtitleExtension(stream.CodecName)
+		lang := stream.Language
+		if lang == "" {
+			lang = "und"
+		}
+
+		// Handle duplicate languages by appending index
+		langCount[lang]++
+		suffix := lang
+		if langCount[lang] > 1 {
+			suffix = fmt.Sprintf("%s_%d", lang, langCount[lang])
+		}
+
+		outputPath := filepath.Join(outputDir, fmt.Sprintf("%s_%s.%s", baseName, suffix, ext))
+
+		args := []string{
+			"-i", inputPath,
+			"-map", fmt.Sprintf("0:%d", stream.Index),
+			"-c:s", getOutputCodec(ext),
+			"-y",
+			outputPath,
+		}
+
+		cmd := exec.CommandContext(ctx, f.ffmpegPath, args...)
+		if err := cmd.Run(); err != nil {
+			// Skip failed extractions (some codecs may not convert)
+			continue
+		}
+
+		var fileSize int64
+		if info, err := os.Stat(outputPath); err == nil {
+			fileSize = info.Size()
+		}
+
+		if fileSize == 0 {
+			os.Remove(outputPath)
+			continue
+		}
+
+		results = append(results, SubtitleExtractResult{
+			StreamIndex:   stream.Index,
+			Language:      lang,
+			LanguageName:  GetLanguageName(lang),
+			Title:         stream.Title,
+			Format:        ext,
+			OriginalCodec: stream.CodecName,
+			FilePath:      outputPath,
+			FileSize:      fileSize,
+		})
+	}
+
+	return results, nil
+}
+
+// getOutputCodec returns the ffmpeg codec for subtitle output format
+func getOutputCodec(ext string) string {
+	switch ext {
+	case "srt":
+		return "srt"
+	case "ass":
+		return "ass"
+	case "vtt":
+		return "webvtt"
+	default:
+		return "srt"
+	}
 }

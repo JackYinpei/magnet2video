@@ -3,15 +3,27 @@
 // Created: 2026-01-22
 package vo
 
+// SubtitleVO represents a subtitle file in API responses
+type SubtitleVO struct {
+	Language     string `json:"language"`      // ISO 639-2 language code
+	LanguageName string `json:"language_name"` // Human-readable language name
+	Title        string `json:"title"`         // Subtitle title
+	Format       string `json:"format"`        // File format: srt, ass, vtt
+	FilePath     string `json:"file_path"`     // Local file path
+	CloudPath    string `json:"cloud_path"`    // Cloud storage path
+	FileSize     int64  `json:"file_size"`     // File size in bytes
+}
+
 // TorrentFileInfo represents a file in a torrent response
 type TorrentFileInfo struct {
-	Index           int    `json:"index"`            // File index
-	Path            string `json:"path"`             // File path
-	Size            int64  `json:"size"`             // File size in bytes
-	SizeReadable    string `json:"size_readable"`    // Human readable size
-	IsStreamable    bool   `json:"is_streamable"`    // Whether the file can be streamed
-	TranscodeStatus int    `json:"transcode_status"` // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
-	TranscodedPath  string `json:"transcoded_path"`  // Path to transcoded file (if available)
+	Index           int          `json:"index"`            // File index
+	Path            string       `json:"path"`             // File path
+	Size            int64        `json:"size"`             // File size in bytes
+	SizeReadable    string       `json:"size_readable"`    // Human readable size
+	IsStreamable    bool         `json:"is_streamable"`    // Whether the file can be streamed
+	TranscodeStatus int          `json:"transcode_status"` // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
+	TranscodedPath  string       `json:"transcoded_path"`  // Path to transcoded file (if available)
+	Subtitles       []SubtitleVO `json:"subtitles"`        // Extracted subtitles
 }
 
 // ParseMagnetResponse response for parsing a magnet URI
