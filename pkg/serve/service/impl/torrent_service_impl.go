@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -482,6 +484,8 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 		return nil, err
 	}
 
+	downloadDir := ts.torrentManager.Client().GetDownloadDir()
+
 	files := make([]vo.TorrentFileInfo, len(t.Files))
 	for i, f := range t.Files {
 		// Convert subtitles
@@ -492,7 +496,7 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 				LanguageName: sub.LanguageName,
 				Title:        sub.Title,
 				Format:       sub.Format,
-				FilePath:     sub.FilePath,
+				FilePath:     toRelativePath(sub.FilePath, downloadDir),
 				CloudPath:    sub.CloudPath,
 				FileSize:     sub.FileSize,
 			}
@@ -505,7 +509,7 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 			SizeReadable:    formatSize(f.Size),
 			IsStreamable:    f.IsStreamable,
 			TranscodeStatus: f.TranscodeStatus,
-			TranscodedPath:  f.TranscodedPath,
+			TranscodedPath:  toRelativePath(f.TranscodedPath, downloadDir),
 			Subtitles:       subtitles,
 		}
 	}
@@ -569,6 +573,29 @@ func formatSize(bytes int64) string {
 
 func formatSpeed(bytesPerSec int64) string {
 	return formatSize(bytesPerSec) + "/s"
+}
+
+// toRelativePath converts an absolute path to a relative path based on the download directory.
+// DB stores absolute paths (for cloud upload etc.), but API returns relative paths for URL construction.
+func toRelativePath(absPath, downloadDir string) string {
+	if absPath == "" {
+		return ""
+	}
+
+	cleanAbs := filepath.Clean(absPath)
+	cleanDownload := filepath.Clean(downloadDir)
+
+	// Use strings.HasPrefix with separator to respect path boundaries
+	prefix := cleanDownload + string(filepath.Separator)
+	if strings.HasPrefix(cleanAbs, prefix) {
+		return cleanAbs[len(prefix):]
+	}
+	// Exact match (path IS the download dir)
+	if cleanAbs == cleanDownload {
+		return "."
+	}
+
+	return absPath
 }
 
 func getStatusFromString(status string) int {
