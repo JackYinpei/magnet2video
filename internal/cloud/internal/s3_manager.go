@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
@@ -46,11 +46,11 @@ func NewS3Manager(cfg *configs.Config, loggerManager logger.LoggerManager) Cloud
 func (m *s3Manager) initialize() error {
 	ctx := context.Background()
 
-	var opts []func(*config.LoadOptions) error
+	var opts []func(*awsconfig.LoadOptions) error
 
 	// Configure credentials if provided
 	if m.cfg.CloudStorageConfig.AccessKeyID != "" && m.cfg.CloudStorageConfig.SecretAccessKey != "" {
-		opts = append(opts, config.WithCredentialsProvider(
+		opts = append(opts, awsconfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(
 				m.cfg.CloudStorageConfig.AccessKeyID,
 				m.cfg.CloudStorageConfig.SecretAccessKey,
@@ -61,10 +61,10 @@ func (m *s3Manager) initialize() error {
 
 	// Configure region
 	if m.cfg.CloudStorageConfig.Region != "" {
-		opts = append(opts, config.WithRegion(m.cfg.CloudStorageConfig.Region))
+		opts = append(opts, awsconfig.WithRegion(m.cfg.CloudStorageConfig.Region))
 	}
 
-	awsCfg, err := config.LoadDefaultConfig(ctx, opts...)
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config: %w", err)
 	}

@@ -357,10 +357,33 @@ func overrideFromEnv(config *Config) {
 	if val := os.Getenv("CLOUD_STORAGE_ENABLED"); val != "" {
 		config.CloudStorageConfig.Enabled = val == "true" || val == "1"
 	}
+	if val := os.Getenv("CLOUD_STORAGE_PROVIDER"); val != "" {
+		config.CloudStorageConfig.Provider = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_BUCKET_NAME"); val != "" {
+		config.CloudStorageConfig.BucketName = val
+	}
+	// GCS specific
 	if val := os.Getenv("GCS_CREDENTIALS_FILE"); val != "" {
 		config.CloudStorageConfig.CredentialsFile = val
 	}
 	if val := os.Getenv("GCS_BUCKET_NAME"); val != "" {
+		config.CloudStorageConfig.BucketName = val
+	}
+	// S3 specific
+	if val := os.Getenv("S3_REGION"); val != "" {
+		config.CloudStorageConfig.Region = val
+	}
+	if val := os.Getenv("S3_ACCESS_KEY_ID"); val != "" {
+		config.CloudStorageConfig.AccessKeyID = val
+	}
+	if val := os.Getenv("S3_SECRET_ACCESS_KEY"); val != "" {
+		config.CloudStorageConfig.SecretAccessKey = val
+	}
+	if val := os.Getenv("S3_ENDPOINT"); val != "" {
+		config.CloudStorageConfig.Endpoint = val
+	}
+	if val := os.Getenv("S3_BUCKET_NAME"); val != "" {
 		config.CloudStorageConfig.BucketName = val
 	}
 }

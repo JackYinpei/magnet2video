@@ -26,11 +26,18 @@ type Manager struct {
 	logFile io.Closer
 }
 
-// NewManager creates a new logger manager instance
+// NewManager creates a new logger manager instance and initializes it
 func NewManager(config *configs.Config) (*Manager, error) {
-	return &Manager{
+	m := &Manager{
 		config: config,
-	}, nil
+	}
+
+	// Initialize immediately so logger is ready to use
+	if err := m.Initialize(); err != nil {
+		return nil, err
+	}
+
+	return m, nil
 }
 
 // Logger returns the logger instance

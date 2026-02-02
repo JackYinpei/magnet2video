@@ -48,10 +48,7 @@ func Start() {
 		log.Fatalf("Failed to initialize container: %v", err)
 	}
 
-	// Initialize managers
-	if err := container.LoggerManager.Initialize(); err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
-	}
+	// Logger is already initialized in wire, just defer close
 	defer container.LoggerManager.Close()
 
 	if err := container.DatabaseManager.Initialize(); err != nil {
