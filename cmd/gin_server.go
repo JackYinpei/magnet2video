@@ -117,6 +117,7 @@ func Start() {
 				container.LoggerManager,
 				container.DatabaseManager,
 				cloudStorageManager,
+				container.QueueProducer,
 			)
 
 			var err error

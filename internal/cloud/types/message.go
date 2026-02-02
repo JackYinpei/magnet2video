@@ -20,4 +20,8 @@ type CloudUploadMessage struct {
 	FileSize      int64  `json:"file_size"`      // File size in bytes
 	IsTranscoded  bool   `json:"is_transcoded"`  // Whether this is a transcoded file
 	CreatorID     int64  `json:"creator_id"`     // Creator user ID
+	RetryCount    int    `json:"retry_count"`    // Retry count for failed uploads
 }
+
+// MaxRetryCount is the maximum number of retry attempts for failed uploads
+const MaxRetryCount = 3

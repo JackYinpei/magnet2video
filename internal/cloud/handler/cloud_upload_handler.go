@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/cloud"
@@ -24,6 +25,7 @@ type CloudUploadHandler struct {
 	loggerManager       logger.LoggerManager
 	dbManager           db.DatabaseManager
 	cloudStorageManager cloud.CloudStorageManager
+	queueProducer       queue.Producer
 }
 
 // NewCloudUploadHandler creates a new cloud upload handler
@@ -32,12 +34,14 @@ func NewCloudUploadHandler(
 	loggerManager logger.LoggerManager,
 	dbManager db.DatabaseManager,
 	cloudStorageManager cloud.CloudStorageManager,
+	queueProducer queue.Producer,
 ) *CloudUploadHandler {
 	return &CloudUploadHandler{
 		config:              config,
 		loggerManager:       loggerManager,
 		dbManager:           dbManager,
 		cloudStorageManager: cloudStorageManager,
+		queueProducer:       queueProducer,
 	}
 }
 
@@ -49,8 +53,8 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 		return err
 	}
 
-	h.loggerManager.Logger().Infof("Processing cloud upload: torrentID=%d, fileIndex=%d, subtitleIndex=%d, path=%s",
-		uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.SubtitleIndex, uploadMsg.LocalPath)
+	h.loggerManager.Logger().Infof("Processing cloud upload: torrentID=%d, fileIndex=%d, subtitleIndex=%d, retry=%d, path=%s",
+		uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.SubtitleIndex, uploadMsg.RetryCount, uploadMsg.LocalPath)
 
 	// Update file cloud upload status to uploading (only for non-subtitle files)
 	if uploadMsg.SubtitleIndex < 0 {
@@ -65,12 +69,12 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 	if os.IsNotExist(err) {
 		errMsg := fmt.Sprintf("local file not found: %s", uploadMsg.LocalPath)
 		h.handleUploadFailure(uploadMsg, errMsg)
-		return fmt.Errorf("local file not found: %s", uploadMsg.LocalPath)
+		return nil // Don't retry if file doesn't exist
 	}
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to stat file: %v", err)
 		h.handleUploadFailure(uploadMsg, errMsg)
-		return fmt.Errorf("failed to stat file: %w", err)
+		return nil
 	}
 
 	// Open local file
@@ -78,16 +82,21 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to open file: %v", err)
 		h.handleUploadFailure(uploadMsg, errMsg)
-		return fmt.Errorf("failed to open file: %w", err)
+		return nil
 	}
 	defer file.Close()
 
 	// Upload to cloud storage
 	err = h.cloudStorageManager.UploadWithProgress(ctx, uploadMsg.CloudPath, file, uploadMsg.ContentType, fileInfo.Size(), nil)
 	if err != nil {
-		errMsg := fmt.Sprintf("cloud upload failed: %v", err)
+		// Try to re-queue for retry
+		if h.requeueForRetry(uploadMsg, err) {
+			return nil // Successfully re-queued, don't mark as failed yet
+		}
+		// Max retries exceeded, mark as failed
+		errMsg := fmt.Sprintf("cloud upload failed after %d retries: %v", uploadMsg.RetryCount, err)
 		h.handleUploadFailure(uploadMsg, errMsg)
-		return fmt.Errorf("cloud upload failed: %w", err)
+		return nil
 	}
 
 	// Update torrent file with cloud path
@@ -104,6 +113,42 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 		uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.SubtitleIndex, uploadMsg.CloudPath)
 
 	return nil
+}
+
+// requeueForRetry attempts to re-queue a failed upload for retry
+func (h *CloudUploadHandler) requeueForRetry(msg cloudTypes.CloudUploadMessage, uploadErr error) bool {
+	if msg.RetryCount >= cloudTypes.MaxRetryCount {
+		h.loggerManager.Logger().Warnf("Max retries exceeded for cloud upload: torrentID=%d, fileIndex=%d, error=%v",
+			msg.TorrentID, msg.FileIndex, uploadErr)
+		return false
+	}
+
+	if h.queueProducer == nil {
+		return false
+	}
+
+	// Increment retry count
+	msg.RetryCount++
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		h.loggerManager.Logger().Errorf("failed to marshal retry message: %v", err)
+		return false
+	}
+
+	// Wait before retry (exponential backoff: 5s, 10s, 20s)
+	backoff := time.Duration(5<<msg.RetryCount) * time.Second
+	h.loggerManager.Logger().Infof("Re-queuing cloud upload for retry %d/%d in %v: torrentID=%d, fileIndex=%d",
+		msg.RetryCount, cloudTypes.MaxRetryCount, backoff, msg.TorrentID, msg.FileIndex)
+
+	go func() {
+		time.Sleep(backoff)
+		if err := h.queueProducer.Send(context.Background(), cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
+			h.loggerManager.Logger().Errorf("failed to re-queue upload: %v", err)
+		}
+	}()
+
+	return true
 }
 
 // handleUploadFailure handles upload failure by updating status and logging

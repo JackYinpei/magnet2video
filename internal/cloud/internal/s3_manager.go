@@ -12,17 +12,22 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/logger"
 )
 
+// Multipart upload threshold: files larger than 100MB use multipart upload
+const multipartUploadThreshold = 100 * 1024 * 1024 // 100MB
+
 // s3Manager implements CloudStorageManager for AWS S3 and S3-compatible storage
 type s3Manager struct {
 	cfg           *configs.Config
 	loggerManager logger.LoggerManager
 	client        *s3.Client
+	uploader      *manager.Uploader
 	presignClient *s3.PresignClient
 }
 
@@ -83,6 +88,12 @@ func (m *s3Manager) initialize() error {
 	m.client = s3.NewFromConfig(awsCfg, s3Opts...)
 	m.presignClient = s3.NewPresignClient(m.client)
 
+	// Create uploader with multipart support for large files
+	m.uploader = manager.NewUploader(m.client, func(u *manager.Uploader) {
+		u.PartSize = 64 * 1024 * 1024 // 64MB per part
+		u.Concurrency = 3             // 3 concurrent uploads
+	})
+
 	// Verify bucket access
 	_, err = m.client.HeadBucket(ctx, &s3.HeadBucketInput{
 		Bucket: aws.String(m.cfg.CloudStorageConfig.BucketName),
@@ -90,6 +101,7 @@ func (m *s3Manager) initialize() error {
 	if err != nil {
 		m.client = nil
 		m.presignClient = nil
+		m.uploader = nil
 		return fmt.Errorf("failed to access bucket %s: %w", m.cfg.CloudStorageConfig.BucketName, err)
 	}
 
@@ -150,12 +162,18 @@ func (m *s3Manager) Upload(ctx context.Context, objectPath string, reader io.Rea
 	return nil
 }
 
-// UploadWithProgress uploads a file with progress callback
+// UploadWithProgress uploads a file, using multipart upload for large files
 func (m *s3Manager) UploadWithProgress(ctx context.Context, objectPath string, reader io.Reader, contentType string, size int64, progressCallback func(bytesWritten int64)) error {
 	if !m.IsEnabled() {
 		return fmt.Errorf("S3 storage is not enabled")
 	}
 
+	// Large files: use multipart upload
+	if size > multipartUploadThreshold {
+		return m.multipartUpload(ctx, objectPath, reader, contentType, size)
+	}
+
+	// Small files: use simple PutObject
 	input := &s3.PutObjectInput{
 		Bucket:        aws.String(m.cfg.CloudStorageConfig.BucketName),
 		Key:           aws.String(objectPath),
@@ -173,6 +191,29 @@ func (m *s3Manager) UploadWithProgress(ctx context.Context, objectPath string, r
 	}
 
 	m.loggerManager.Logger().Infof("Uploaded file to S3: %s (size: %d bytes)", objectPath, size)
+	return nil
+}
+
+// multipartUpload uploads a large file using S3 multipart upload
+func (m *s3Manager) multipartUpload(ctx context.Context, objectPath string, reader io.Reader, contentType string, size int64) error {
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(m.cfg.CloudStorageConfig.BucketName),
+		Key:    aws.String(objectPath),
+		Body:   reader,
+	}
+
+	if contentType != "" {
+		input.ContentType = aws.String(contentType)
+	}
+
+	m.loggerManager.Logger().Infof("Starting multipart upload: %s (size: %d bytes, partSize: 64MB)", objectPath, size)
+
+	_, err := m.uploader.Upload(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to upload to %s: %w", objectPath, err)
+	}
+
+	m.loggerManager.Logger().Infof("Multipart upload completed: %s (size: %d bytes)", objectPath, size)
 	return nil
 }
 
