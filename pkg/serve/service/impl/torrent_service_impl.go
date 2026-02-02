@@ -182,7 +182,7 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 			Name:         torrentInfo.Name,
 			TotalSize:    torrentInfo.TotalSize,
 			Files:        files,
-			DownloadPath: "./download",
+			DownloadPath: ts.torrentManager.Client().GetDownloadDir(),
 			Status:       torrentModel.StatusDownloading,
 			Progress:     0,
 			Trackers:     torrentModel.StringSlice(req.Trackers),

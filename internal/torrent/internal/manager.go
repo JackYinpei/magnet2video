@@ -99,13 +99,6 @@ func NewManager(config *configs.Config) (*Manager, error) {
 		downloadDir = "./download"
 	}
 
-	// Convert to absolute path
-	absDownloadDir, err := filepath.Abs(downloadDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path for download dir: %w", err)
-	}
-	downloadDir = absDownloadDir
-
 	// Ensure download directory exists
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create download directory: %w", err)
@@ -622,55 +615,99 @@ func (c *Client) GetFilePath(infoHash string, filePath string) (string, error) {
 }
 
 // GetFileReader returns a reader for the file and its info, supporting fuzzy path matching
+// Falls back to direct disk read if torrent is not in memory
 func (c *Client) GetFileReader(infoHash string, filePath string) (io.ReadSeeker, *FileInfo, error) {
 	c.mu.RLock()
 	t, exists := c.torrents[infoHash]
 	c.mu.RUnlock()
 
-	if !exists {
-		return nil, nil, fmt.Errorf("torrent not found: %s", infoHash)
-	}
+	// If torrent exists in memory, try to read from it
+	if exists {
+		// Find the file in the torrent
+		var foundFile *torrent.File
 
-	// Find the file in the torrent
-	var foundFile *torrent.File
-	
-	// First pass: exact match
-	for _, file := range t.Files() {
-		if file.DisplayPath() == filePath {
-			foundFile = file
-			break
-		}
-	}
-
-	// Second pass: fuzzy match (match by filename only)
-	if foundFile == nil {
-		targetBase := filepath.Base(filePath)
+		// First pass: exact match
 		for _, file := range t.Files() {
-			if filepath.Base(file.DisplayPath()) == targetBase {
+			if file.DisplayPath() == filePath {
 				foundFile = file
 				break
 			}
 		}
+
+		// Second pass: fuzzy match (match by filename only)
+		if foundFile == nil {
+			targetBase := filepath.Base(filePath)
+			for _, file := range t.Files() {
+				if filepath.Base(file.DisplayPath()) == targetBase {
+					foundFile = file
+					break
+				}
+			}
+		}
+
+		if foundFile != nil {
+			// Prioritize this file for download
+			foundFile.SetPriority(torrent.PiecePriorityNow)
+
+			// Create reader
+			reader := foundFile.NewReader()
+
+			// Create file info
+			fileInfo := &FileInfo{
+				Path:         foundFile.DisplayPath(),
+				Size:         foundFile.Length(),
+				IsStreamable: isStreamableFile(foundFile.DisplayPath()),
+			}
+
+			return reader, fileInfo, nil
+		}
 	}
 
-	if foundFile == nil {
-		return nil, nil, fmt.Errorf("file not found in torrent: %s", filePath)
+	// Fallback: try to read directly from disk
+	// This handles cases where torrent is not restored but file exists on disk
+	fullPath := filepath.Join(c.downloadDir, filePath)
+
+	// Also try fuzzy match on disk
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		// Try to find file by name in the download directory
+		targetBase := filepath.Base(filePath)
+		found := false
+		filepath.Walk(c.downloadDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			if filepath.Base(path) == targetBase {
+				fullPath = path
+				found = true
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if !found {
+			return nil, nil, fmt.Errorf("file not found: %s", filePath)
+		}
 	}
 
-	// Prioritize this file for download
-	foundFile.SetPriority(torrent.PiecePriorityNow)
+	// Open file from disk
+	file, err := os.Open(fullPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open file: %w", err)
+	}
 
-	// Create reader
-	reader := foundFile.NewReader()
-	
-	// Create file info
+	// Get file info
+	stat, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+
 	fileInfo := &FileInfo{
-		Path:         foundFile.DisplayPath(),
-		Size:         foundFile.Length(),
-		IsStreamable: isStreamableFile(foundFile.DisplayPath()),
+		Path:         filePath,
+		Size:         stat.Size(),
+		IsStreamable: isStreamableFile(filePath),
 	}
 
-	return reader, fileInfo, nil
+	return file, fileInfo, nil
 }
 
 // Close closes the torrent client

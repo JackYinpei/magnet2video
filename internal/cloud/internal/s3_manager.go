@@ -156,17 +156,10 @@ func (m *s3Manager) UploadWithProgress(ctx context.Context, objectPath string, r
 		return fmt.Errorf("S3 storage is not enabled")
 	}
 
-	progressReader := &progressReaderWrapper{
-		reader:           reader,
-		totalSize:        size,
-		bytesRead:        0,
-		progressCallback: progressCallback,
-	}
-
 	input := &s3.PutObjectInput{
 		Bucket:        aws.String(m.cfg.CloudStorageConfig.BucketName),
 		Key:           aws.String(objectPath),
-		Body:          progressReader,
+		Body:          reader,
 		ContentLength: aws.Int64(size),
 	}
 

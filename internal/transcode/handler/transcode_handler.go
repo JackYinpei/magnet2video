@@ -328,15 +328,16 @@ func (h *TranscodeHandler) queueCloudUpload(ctx context.Context, torrentID int64
 	h.updateTorrentFileCloudPending(torrentID, fileIndex)
 
 	msg := cloudTypes.CloudUploadMessage{
-		TorrentID:    torrentID,
-		InfoHash:     infoHash,
-		FileIndex:    fileIndex,
-		LocalPath:    localPath,
-		CloudPath:    cloudPath,
-		ContentType:  contentType,
-		FileSize:     fileSize,
-		IsTranscoded: isTranscoded,
-		CreatorID:    creatorID,
+		TorrentID:     torrentID,
+		InfoHash:      infoHash,
+		FileIndex:     fileIndex,
+		SubtitleIndex: -1, // Not a subtitle
+		LocalPath:     localPath,
+		CloudPath:     cloudPath,
+		ContentType:   contentType,
+		FileSize:      fileSize,
+		IsTranscoded:  isTranscoded,
+		CreatorID:     creatorID,
 	}
 
 	msgBytes, err := json.Marshal(msg)
@@ -399,7 +400,7 @@ func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results 
 	}
 
 	var subtitles []torrentModel.SubtitleInfo
-	for _, r := range results {
+	for i, r := range results {
 		subtitles = append(subtitles, torrentModel.SubtitleInfo{
 			StreamIndex:   r.StreamIndex,
 			Language:      r.Language,
@@ -413,7 +414,7 @@ func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results 
 
 		// Queue cloud upload for each subtitle file
 		if h.config.CloudStorageConfig.Enabled && h.queueProducer != nil {
-			h.queueSubtitleCloudUpload(context.Background(), msg, r)
+			h.queueSubtitleCloudUpload(context.Background(), msg, r, i)
 		}
 	}
 
@@ -424,7 +425,7 @@ func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results 
 }
 
 // queueSubtitleCloudUpload sends a cloud upload job for a subtitle file
-func (h *TranscodeHandler) queueSubtitleCloudUpload(ctx context.Context, msg types.TranscodeMessage, result ffmpeg.SubtitleExtractResult) {
+func (h *TranscodeHandler) queueSubtitleCloudUpload(ctx context.Context, msg types.TranscodeMessage, result ffmpeg.SubtitleExtractResult, subtitleIndex int) {
 	pathPrefix := h.config.CloudStorageConfig.PathPrefix
 	if pathPrefix == "" {
 		pathPrefix = "torrents"
@@ -443,15 +444,16 @@ func (h *TranscodeHandler) queueSubtitleCloudUpload(ctx context.Context, msg typ
 	}
 
 	uploadMsg := cloudTypes.CloudUploadMessage{
-		TorrentID:    msg.TorrentID,
-		InfoHash:     msg.InfoHash,
-		FileIndex:    msg.FileIndex,
-		LocalPath:    result.FilePath,
-		CloudPath:    cloudPath,
-		ContentType:  contentType,
-		FileSize:     result.FileSize,
-		IsTranscoded: false,
-		CreatorID:    msg.CreatorID,
+		TorrentID:     msg.TorrentID,
+		InfoHash:      msg.InfoHash,
+		FileIndex:     msg.FileIndex,
+		SubtitleIndex: subtitleIndex,
+		LocalPath:     result.FilePath,
+		CloudPath:     cloudPath,
+		ContentType:   contentType,
+		FileSize:      result.FileSize,
+		IsTranscoded:  false,
+		CreatorID:     msg.CreatorID,
 	}
 
 	msgBytes, err := json.Marshal(uploadMsg)

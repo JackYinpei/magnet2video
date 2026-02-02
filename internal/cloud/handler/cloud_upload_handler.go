@@ -49,13 +49,15 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 		return err
 	}
 
-	h.loggerManager.Logger().Infof("Processing cloud upload: torrentID=%d, fileIndex=%d, path=%s",
-		uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.LocalPath)
+	h.loggerManager.Logger().Infof("Processing cloud upload: torrentID=%d, fileIndex=%d, subtitleIndex=%d, path=%s",
+		uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.SubtitleIndex, uploadMsg.LocalPath)
 
-	// Update file cloud upload status to uploading
-	if err := h.updateTorrentFileCloudStatus(uploadMsg.TorrentID, uploadMsg.FileIndex, torrentModel.CloudUploadStatusUploading, ""); err != nil {
-		h.loggerManager.Logger().Errorf("failed to update cloud upload status: %v", err)
-		return err
+	// Update file cloud upload status to uploading (only for non-subtitle files)
+	if uploadMsg.SubtitleIndex < 0 {
+		if err := h.updateTorrentFileCloudStatus(uploadMsg.TorrentID, uploadMsg.FileIndex, torrentModel.CloudUploadStatusUploading, ""); err != nil {
+			h.loggerManager.Logger().Errorf("failed to update cloud upload status: %v", err)
+			return err
+		}
 	}
 
 	// Check if local file exists
@@ -89,7 +91,7 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 	}
 
 	// Update torrent file with cloud path
-	if err := h.updateTorrentFileCloudCompleted(uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.CloudPath); err != nil {
+	if err := h.updateTorrentFileCloudCompleted(uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.SubtitleIndex, uploadMsg.CloudPath); err != nil {
 		h.loggerManager.Logger().Errorf("failed to update torrent file cloud path: %v", err)
 	}
 
@@ -98,18 +100,21 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 		h.loggerManager.Logger().Errorf("failed to update torrent cloud status: %v", err)
 	}
 
-	h.loggerManager.Logger().Infof("Cloud upload completed: torrentID=%d, fileIndex=%d, cloudPath=%s",
-		uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.CloudPath)
+	h.loggerManager.Logger().Infof("Cloud upload completed: torrentID=%d, fileIndex=%d, subtitleIndex=%d, cloudPath=%s",
+		uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.SubtitleIndex, uploadMsg.CloudPath)
 
 	return nil
 }
 
 // handleUploadFailure handles upload failure by updating status and logging
 func (h *CloudUploadHandler) handleUploadFailure(msg cloudTypes.CloudUploadMessage, errMsg string) {
-	h.loggerManager.Logger().Errorf("Cloud upload failed: torrentID=%d, fileIndex=%d, error=%s",
-		msg.TorrentID, msg.FileIndex, errMsg)
+	h.loggerManager.Logger().Errorf("Cloud upload failed: torrentID=%d, fileIndex=%d, subtitleIndex=%d, error=%s",
+		msg.TorrentID, msg.FileIndex, msg.SubtitleIndex, errMsg)
 
-	h.updateTorrentFileCloudStatus(msg.TorrentID, msg.FileIndex, torrentModel.CloudUploadStatusFailed, errMsg)
+	// Only update status for non-subtitle files
+	if msg.SubtitleIndex < 0 {
+		h.updateTorrentFileCloudStatus(msg.TorrentID, msg.FileIndex, torrentModel.CloudUploadStatusFailed, errMsg)
+	}
 }
 
 // updateTorrentFileCloudStatus updates the cloud upload status of a torrent file
@@ -130,17 +135,25 @@ func (h *CloudUploadHandler) updateTorrentFileCloudStatus(torrentID int64, fileI
 }
 
 // updateTorrentFileCloudCompleted marks a torrent file's cloud upload as completed
-func (h *CloudUploadHandler) updateTorrentFileCloudCompleted(torrentID int64, fileIndex int, cloudPath string) error {
+func (h *CloudUploadHandler) updateTorrentFileCloudCompleted(torrentID int64, fileIndex int, subtitleIndex int, cloudPath string) error {
 	var torrentRecord torrentModel.Torrent
 	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
 		return err
 	}
 
 	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
-		torrentRecord.Files[fileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusCompleted
-		torrentRecord.Files[fileIndex].CloudPath = cloudPath
-		torrentRecord.Files[fileIndex].CloudUploadError = ""
-		torrentRecord.CloudUploadedCount++
+		if subtitleIndex >= 0 {
+			// Update subtitle's CloudPath
+			if subtitleIndex < len(torrentRecord.Files[fileIndex].Subtitles) {
+				torrentRecord.Files[fileIndex].Subtitles[subtitleIndex].CloudPath = cloudPath
+			}
+		} else {
+			// Update main file's cloud status
+			torrentRecord.Files[fileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusCompleted
+			torrentRecord.Files[fileIndex].CloudPath = cloudPath
+			torrentRecord.Files[fileIndex].CloudUploadError = ""
+			torrentRecord.CloudUploadedCount++
+		}
 	}
 
 	return h.dbManager.DB().Save(&torrentRecord).Error
