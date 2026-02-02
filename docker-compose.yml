@@ -31,6 +31,7 @@ services:
       - ./download:/app/download
       - ./configs:/app/configs
       - ./.logs:/app/.logs
+      - ./gcs-sa.json:/secrets/gcs-sa.json:ro
     env_file:
       - .docker.env
     depends_on:
