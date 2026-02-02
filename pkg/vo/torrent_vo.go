@@ -14,16 +14,22 @@ type SubtitleVO struct {
 	FileSize     int64  `json:"file_size"`     // File size in bytes
 }
 
-// TorrentFileInfo represents a file in a torrent response
+// TorrentFileInfo represents a file in a torrent response (flattened structure)
 type TorrentFileInfo struct {
-	Index           int          `json:"index"`            // File index
-	Path            string       `json:"path"`             // File path
-	Size            int64        `json:"size"`             // File size in bytes
-	SizeReadable    string       `json:"size_readable"`    // Human readable size
-	IsStreamable    bool         `json:"is_streamable"`    // Whether the file can be streamed
-	TranscodeStatus int          `json:"transcode_status"` // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
-	TranscodedPath  string       `json:"transcoded_path"`  // Path to transcoded file (if available)
-	Subtitles       []SubtitleVO `json:"subtitles"`        // Extracted subtitles
+	Index           int    `json:"index"`                      // File index in the flattened array
+	Path            string `json:"path"`                       // File path (relative to download dir)
+	Size            int64  `json:"size"`                       // File size in bytes
+	SizeReadable    string `json:"size_readable"`              // Human readable size
+	Type            string `json:"type"`                       // File type: "video", "audio", "subtitle", "other"
+	Source          string `json:"source"`                     // Source: "original", "transcoded", "extracted"
+	OriginalIndex   int    `json:"original_index"`             // Original file index (-1 for original files)
+	IsStreamable    bool   `json:"is_streamable"`              // Whether the file can be streamed directly
+	TranscodeStatus int    `json:"transcode_status,omitempty"` // Transcode status (only for original video files): 0=none, 1=pending, 2=processing, 3=completed, 4=failed
+	Language        string `json:"language,omitempty"`         // Language code (for subtitles)
+	LanguageName    string `json:"language_name,omitempty"`    // Human-readable language name (for subtitles)
+	Title           string `json:"title,omitempty"`            // Title (for subtitles, e.g. "English [SDH]")
+	CloudPath       string `json:"cloud_path,omitempty"`       // Cloud storage path
+	CloudStatus     int    `json:"cloud_status"`               // Cloud upload status: 0=none, 1=pending, 2=uploading, 3=completed, 4=failed
 }
 
 // ParseMagnetResponse response for parsing a magnet URI

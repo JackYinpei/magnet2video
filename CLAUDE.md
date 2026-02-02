@@ -354,7 +354,7 @@ type Torrent struct {
     TotalSize           int64        // 总大小(字节)
     Status              int          // 下载状态: 0=待下载,1=下载中,2=完成,3=失败,4=暂停
     Progress            int          // 下载进度(0-100)
-    TranscodeStatus     int          // 转码状态: 0=未转码,1=转码中,2=完成,3=失败
+    TranscodeStatus     int          // 转码状态: 0=无需转码,1=待转码,2=转码中,3=完成,4=失败
     TranscodeProgress   int          // 转码进度(0-100)
     IsPublic            bool         // 是否公开分享
     UserID              int64        // 所属用户 ID
@@ -369,7 +369,7 @@ type TorrentFile struct {
     Size              int64  // 文件大小
     IsSelected        bool   // 是否下载
     IsStreamable      bool   // 是否可流式播放(视频/音频)
-    TranscodeStatus   int    // 文件转码状态
+    TranscodeStatus   int    // 文件转码状态: 0=无需转码,1=待转码,2=转码中,3=完成,4=失败
     TranscodedPath    string // 转码后文件路径
     CloudUploadStatus int    // 云上传状态: 0=无, 1=待上传, 2=上传中, 3=完成, 4=失败
     CloudPath         string // 云存储对象路径

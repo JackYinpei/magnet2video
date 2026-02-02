@@ -250,10 +250,21 @@ function convertAssTime(assTime) {
 }
 
 // Find matching subtitle for a video file
-function findMatchingSubtitle(videoPath, subtitleFiles) {
+// Now also supports matching by original_index for extracted subtitles
+function findMatchingSubtitle(videoPath, subtitleFiles, videoOriginalIndex = -1) {
+    // If we have an original index, try to find subtitles extracted from this video
+    if (videoOriginalIndex >= 0) {
+        const matchByIndex = subtitleFiles.find(sub =>
+            sub.source === 'extracted' && sub.original_index === videoOriginalIndex
+        );
+        if (matchByIndex) {
+            return matchByIndex;
+        }
+    }
+
     const videoBaseName = videoPath.replace(/\.[^/.]+$/, '').toLowerCase();
 
-    // First, try to find exact match (same base name)
+    // Try to find exact match (same base name)
     for (const sub of subtitleFiles) {
         const subBaseName = sub.path.replace(/\.[^/.]+$/, '').toLowerCase();
         if (subBaseName === videoBaseName) {
@@ -896,7 +907,7 @@ async function openPlayer(infoHash, isOwner = false) {
 
         currentInfoHash = infoHash;
         currentTorrentFiles = data.files;
-        currentSubtitleFiles = data.files.filter(f => isSubtitleFile(f.path));
+        currentSubtitleFiles = data.files.filter(f => f.type === 'subtitle');
         elements.playerTitle.textContent = data.name;
 
         // 渲染分享按钮（仅对自己的资源显示）
@@ -912,7 +923,7 @@ async function openPlayer(infoHash, isOwner = false) {
         }
 
         // 渲染文件列表
-        const videoFiles = data.files.filter(f => isVideoFile(f.path));
+        const videoFiles = data.files.filter(f => f.type === 'video');
 
         if (videoFiles.length === 0) {
             elements.playerFiles.innerHTML = '<p>暂无可播放的视频文件</p>';
@@ -929,7 +940,7 @@ async function openPlayer(infoHash, isOwner = false) {
                             </div>
                             ${currentSubtitleFiles.map(sub => `
                                 <div class="subtitle-option" data-path="${sub.path}" onclick="selectSubtitle('${sub.path}')">
-                                    <span>${sub.path}</span>
+                                    <span>${sub.language_name || sub.title || sub.path.split('/').pop()}</span>
                                     <span class="subtitle-size">${sub.size_readable || formatSize(sub.size)}</span>
                                 </div>
                             `).join('')}
@@ -942,21 +953,48 @@ async function openPlayer(infoHash, isOwner = false) {
                 ${subtitleSelectorHtml}
                 <h4>文件列表</h4>
                 ${data.files.map((file, index) => {
-                const isVideo = isVideoFile(file.path);
-                const isSubtitle = isSubtitleFile(file.path);
-                const icon = isVideo ? '🎬' : (isSubtitle ? '📝' : '📄');
-                const hasTranscoded = file.transcode_status === 3 && file.transcoded_path;
-                const transcodeStatusText = getFileTranscodeStatus(file);
-                // File is playable if: (video AND streamable) OR has transcoded version
-                const isPlayable = isVideo && (file.is_streamable || hasTranscoded);
+                const isVideo = file.type === 'video';
+                const isSubtitle = file.type === 'subtitle';
+                const isAudio = file.type === 'audio';
+                const isGenerated = file.source === 'transcoded' || file.source === 'extracted';
+
+                // Icons: original video🎬, transcoded video📀, subtitle📝, audio🎵, other📄
+                let icon = '📄';
+                if (file.type === 'video') icon = file.source === 'transcoded' ? '📀' : '🎬';
+                else if (file.type === 'subtitle') icon = '📝';
+                else if (file.type === 'audio') icon = '🎵';
+
+                // Source badge
+                const sourceLabel = file.source === 'transcoded' ? ' <span class="source-badge transcoded">转码</span>'
+                                  : file.source === 'extracted' ? ' <span class="source-badge extracted">提取</span>'
+                                  : '';
+
+                // Transcode status text (only for original video files)
+                const transcodeStatusText = file.source === 'original' ? getFileTranscodeStatus(file) : '';
+
+                // File is playable if:
+                // - It's a transcoded video (source === 'transcoded', always playable)
+                // - It's an original video that's streamable
+                // - For original video with transcode_status === 3, user should click the transcoded version instead
+                const isPlayable = isVideo && (
+                    file.source === 'transcoded' ||
+                    file.is_streamable
+                );
+
+                // Display name - for subtitles show language name, for others show path
+                const displayName = isSubtitle && file.language_name
+                    ? `${file.language_name}${file.title && file.title !== file.language_name ? ' - ' + file.title : ''}`
+                    : file.path;
+
                 return `
-                        <div class="player-file-item ${!isPlayable ? 'disabled' : ''}"
+                        <div class="player-file-item ${!isPlayable && isVideo ? 'disabled' : ''} ${isGenerated ? 'generated' : ''}"
                              data-index="${index}"
                              data-path="${file.path}"
-                             data-transcoded-path="${file.transcoded_path || ''}"
-                             data-transcode-status="${file.transcode_status || 0}"
+                             data-type="${file.type || ''}"
+                             data-source="${file.source || 'original'}"
+                             data-original-index="${file.original_index}"
                              data-streamable="${file.is_streamable}">
-                            <span>${icon} ${file.path} ${transcodeStatusText}</span>
+                            <span>${icon} ${displayName}${sourceLabel} ${transcodeStatusText}</span>
                             <span>${file.size_readable || formatSize(file.size)}</span>
                         </div>
                     `;
@@ -967,12 +1005,21 @@ async function openPlayer(infoHash, isOwner = false) {
             elements.playerFiles.querySelectorAll('.player-file-item:not(.disabled)').forEach(item => {
                 item.addEventListener('click', () => {
                     const filePath = item.dataset.path;
-                    const transcodedPath = item.dataset.transcodedPath;
-                    const transcodeStatus = parseInt(item.dataset.transcodeStatus) || 0;
+                    const fileSource = item.dataset.source;
                     const fileIdx = parseInt(item.dataset.index);
-                    // Use transcoded file if available (status === 3 means completed)
-                    const pathToPlay = (transcodeStatus === 3 && transcodedPath) ? transcodedPath : filePath;
-                    playFile(pathToPlay, filePath, fileIdx);
+
+                    let pathToPlay = filePath;
+                    let originalPath = filePath;
+
+                    if (fileSource === 'transcoded') {
+                        // Transcoded file: play directly, use original for subtitle matching
+                        const origIdx = parseInt(item.dataset.originalIndex);
+                        const origFile = origIdx >= 0 ? data.files[origIdx] : null;
+                        originalPath = origFile ? origFile.path : filePath;
+                    }
+
+                    playFile(pathToPlay, originalPath, fileIdx);
+
                     // 更新选中状态
                     elements.playerFiles.querySelectorAll('.player-file-item').forEach(i => {
                         i.classList.remove('active');
@@ -982,17 +1029,23 @@ async function openPlayer(infoHash, isOwner = false) {
             });
 
             // 自动播放第一个可播放的文件
-            // Playable = (streamable) OR (has transcoded version)
-            const firstPlayableIdx = data.files.findIndex(f =>
-                isVideoFile(f.path) && (f.is_streamable || (f.transcode_status === 3 && f.transcoded_path))
+            // Prefer transcoded version over streamable original
+            const firstTranscoded = data.files.find(f => f.type === 'video' && f.source === 'transcoded');
+            const firstStreamableOriginal = data.files.find(f =>
+                f.type === 'video' && f.source === 'original' && f.is_streamable
             );
-            if (firstPlayableIdx >= 0) {
-                const firstPlayable = data.files[firstPlayableIdx];
-                // Use transcoded file if available
-                const pathToPlay = (firstPlayable.transcode_status === 3 && firstPlayable.transcoded_path)
-                    ? firstPlayable.transcoded_path
-                    : firstPlayable.path;
-                playFile(pathToPlay, firstPlayable.path, firstPlayableIdx);
+            const firstPlayable = firstTranscoded || firstStreamableOriginal;
+            if (firstPlayable) {
+                const playIdx = data.files.indexOf(firstPlayable);
+                let pathToPlay = firstPlayable.path;
+                let originalPath = firstPlayable.path;
+
+                if (firstPlayable.source === 'transcoded') {
+                    const origFile = firstPlayable.original_index >= 0 ? data.files[firstPlayable.original_index] : null;
+                    originalPath = origFile ? origFile.path : firstPlayable.path;
+                }
+
+                playFile(pathToPlay, originalPath, playIdx);
             }
         }
 
@@ -1038,11 +1091,12 @@ async function playFile(filePath, originalPath = null, fileIndex = -1) {
     const subtitleMatchPath = originalPath || filePath;
 
     // Find file info to check cloud upload status
-    const fileInfo = currentTorrentFiles.find(f => f.path === (originalPath || filePath));
+    const fileInfo = currentTorrentFiles.find(f => f.path === filePath) ||
+                     currentTorrentFiles.find(f => f.path === (originalPath || filePath));
 
     // Check if file is uploaded to cloud and get signed URL
     let videoUrl;
-    if (fileInfo && fileInfo.cloud_upload_status === 3 && fileInfo.cloud_path) {
+    if (fileInfo && fileInfo.cloud_status === 3 && fileInfo.cloud_path) {
         // File is in cloud, get signed URL
         const idx = fileIndex >= 0 ? fileIndex : currentTorrentFiles.indexOf(fileInfo);
         try {
@@ -1071,8 +1125,19 @@ async function playFile(filePath, originalPath = null, fileIndex = -1) {
 
     elements.videoPlayer.src = videoUrl;
 
-    // Try to find and load matching subtitle automatically (use original path for matching)
-    const matchingSubtitle = findMatchingSubtitle(subtitleMatchPath, currentSubtitleFiles);
+    // Try to find and load matching subtitle automatically
+    // First find the original index for subtitle matching
+    let videoOriginalIndex = -1;
+    if (fileInfo) {
+        // If the file is a transcoded video, use its original_index
+        // Otherwise, find the original file's index in the array
+        if (fileInfo.source === 'transcoded' && fileInfo.original_index >= 0) {
+            videoOriginalIndex = fileInfo.original_index;
+        } else if (fileInfo.source === 'original') {
+            videoOriginalIndex = currentTorrentFiles.indexOf(fileInfo);
+        }
+    }
+    const matchingSubtitle = findMatchingSubtitle(subtitleMatchPath, currentSubtitleFiles, videoOriginalIndex);
     if (matchingSubtitle) {
         await loadAndAttachSubtitle(matchingSubtitle.path);
         // Update subtitle selector UI
@@ -1489,7 +1554,13 @@ async function resetTranscode(infoHash) {
 // Helper functions for admin
 function formatDate(dateStr) {
     if (!dateStr) return '-';
-    const date = new Date(dateStr);
+    // Handle Unix timestamp in seconds (backend sends seconds, JS Date expects milliseconds)
+    let timestamp = dateStr;
+    if (typeof dateStr === 'number' && dateStr < 10000000000) {
+        // Unix timestamp in seconds (10 digits), convert to milliseconds
+        timestamp = dateStr * 1000;
+    }
+    const date = new Date(timestamp);
     return date.toLocaleDateString('zh-CN', {
         year: 'numeric',
         month: '2-digit',

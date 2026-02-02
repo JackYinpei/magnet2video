@@ -8,6 +8,7 @@
 .docker.env
 !.local.env.example
 !.docker.env.example
+gcs-sa.json
 
 # Project
 .logs/
