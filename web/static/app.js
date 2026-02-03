@@ -81,7 +81,16 @@ const elements = {
 
     // 通用
     toast: document.getElementById('toast'),
-    loading: document.getElementById('loading')
+    loading: document.getElementById('loading'),
+
+    // 海报预览
+    posterModal: document.getElementById('poster-modal'),
+    posterModalBackdrop: document.getElementById('poster-modal-backdrop'),
+    posterModalClose: document.getElementById('poster-modal-close'),
+    posterPreviewImage: document.getElementById('poster-preview-image'),
+    posterPreviewName: document.getElementById('poster-preview-name'),
+    posterSetBtn: document.getElementById('poster-set-btn'),
+    posterCancelBtn: document.getElementById('poster-cancel-btn')
 };
 
 // ============ 工具函数 ============
@@ -130,6 +139,11 @@ function isVideoFile(path) {
 function isSubtitleFile(path) {
     const ext = path.toLowerCase().split('.').pop();
     return ['srt', 'vtt', 'ass', 'ssa'].includes(ext);
+}
+
+function isImageFile(path) {
+    const ext = path.toLowerCase().split('.').pop();
+    return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(ext);
 }
 
 // Convert SRT to WebVTT format
@@ -891,6 +905,8 @@ let currentTorrentIsOwner = false;
 let currentTorrentFiles = [];
 let currentSubtitleFiles = [];
 let currentSubtitleBlobUrl = null;
+let currentPosterCandidate = null;
+let currentPosterPreviewUrl = null;
 
 async function openPlayer(infoHash, isOwner = false) {
     showLoading();
@@ -956,6 +972,7 @@ async function openPlayer(infoHash, isOwner = false) {
                 const isVideo = file.type === 'video';
                 const isSubtitle = file.type === 'subtitle';
                 const isAudio = file.type === 'audio';
+                const isImage = isImageFile(file.path);
                 const isGenerated = file.source === 'transcoded' || file.source === 'extracted';
 
                 // Icons: original video🎬, transcoded video📀, subtitle📝, audio🎵, other📄
@@ -963,6 +980,7 @@ async function openPlayer(infoHash, isOwner = false) {
                 if (file.type === 'video') icon = file.source === 'transcoded' ? '📀' : '🎬';
                 else if (file.type === 'subtitle') icon = '📝';
                 else if (file.type === 'audio') icon = '🎵';
+                else if (isImage) icon = '🖼️';
 
                 // Source badge
                 const sourceLabel = file.source === 'transcoded' ? ' <span class="source-badge transcoded">转码</span>'
@@ -986,6 +1004,12 @@ async function openPlayer(infoHash, isOwner = false) {
                     ? `${file.language_name}${file.title && file.title !== file.language_name ? ' - ' + file.title : ''}`
                     : file.path;
 
+                const canSetPoster = currentTorrentIsOwner && isImage;
+                const actionHtml = canSetPoster
+                    ? `<button class="btn btn-sm btn-ghost poster-btn" data-index="${index}" data-path="${file.path}">设为海报</button>`
+                    : '';
+                const sizeText = file.size_readable || formatSize(file.size);
+
                 return `
                         <div class="player-file-item ${!isPlayable && isVideo ? 'disabled' : ''} ${isGenerated ? 'generated' : ''}"
                              data-index="${index}"
@@ -993,20 +1017,42 @@ async function openPlayer(infoHash, isOwner = false) {
                              data-type="${file.type || ''}"
                              data-source="${file.source || 'original'}"
                              data-original-index="${file.original_index}"
-                             data-streamable="${file.is_streamable}">
+                             data-streamable="${file.is_streamable}"
+                             data-playable="${isPlayable}"
+                             data-image="${isImage}">
                             <span>${icon} ${displayName}${sourceLabel} ${transcodeStatusText}</span>
-                            <span>${file.size_readable || formatSize(file.size)}</span>
+                            <div class="player-file-meta">
+                                <span class="player-file-size">${sizeText}</span>
+                                ${actionHtml}
+                            </div>
                         </div>
                     `;
             }).join('')}
             `;
 
             // 绑定文件点击事件
-            elements.playerFiles.querySelectorAll('.player-file-item:not(.disabled)').forEach(item => {
+            elements.playerFiles.querySelectorAll('.player-file-item').forEach(item => {
                 item.addEventListener('click', () => {
+                    if (item.classList.contains('disabled')) {
+                        return;
+                    }
+
                     const filePath = item.dataset.path;
                     const fileSource = item.dataset.source;
                     const fileIdx = parseInt(item.dataset.index);
+                    const isImage = item.dataset.image === 'true';
+                    const isPlayable = item.dataset.playable === 'true';
+
+                    if (isImage) {
+                        if (currentTorrentIsOwner) {
+                            openPosterPreview(fileIdx, filePath);
+                        }
+                        return;
+                    }
+
+                    if (!isPlayable) {
+                        return;
+                    }
 
                     let pathToPlay = filePath;
                     let originalPath = filePath;
@@ -1025,6 +1071,15 @@ async function openPlayer(infoHash, isOwner = false) {
                         i.classList.remove('active');
                     });
                     item.classList.add('active');
+                });
+            });
+
+            elements.playerFiles.querySelectorAll('.poster-btn').forEach(btn => {
+                btn.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    const fileIdx = parseInt(btn.dataset.index);
+                    const filePath = btn.dataset.path;
+                    openPosterPreview(fileIdx, filePath);
                 });
             });
 
@@ -1063,6 +1118,72 @@ async function openPlayer(infoHash, isOwner = false) {
     }
 }
 
+async function openPosterPreview(fileIndex, filePath) {
+    if (!currentInfoHash || !currentTorrentIsOwner) {
+        return;
+    }
+
+    const fileInfo = currentTorrentFiles[fileIndex] || currentTorrentFiles.find(f => f.path === filePath);
+    const resolvedPath = fileInfo?.path || filePath || '';
+    const displayName = resolvedPath.split('/').pop() || resolvedPath;
+
+    currentPosterCandidate = {
+        infoHash: currentInfoHash,
+        fileIndex,
+        filePath: resolvedPath
+    };
+
+    elements.posterPreviewName.textContent = displayName;
+    elements.posterSetBtn.disabled = true;
+    elements.posterPreviewImage.src = '';
+    elements.posterModal.classList.remove('hidden');
+
+    try {
+        const previewUrl = await getPreviewFileUrl(fileInfo, fileIndex, resolvedPath);
+        currentPosterPreviewUrl = previewUrl;
+        elements.posterPreviewImage.onload = () => {
+            elements.posterSetBtn.disabled = false;
+        };
+        elements.posterPreviewImage.onerror = () => {
+            elements.posterSetBtn.disabled = true;
+            showToast('图片预览失败', 'error');
+        };
+        elements.posterPreviewImage.src = previewUrl;
+    } catch (error) {
+        elements.posterSetBtn.disabled = true;
+        showToast('图片预览失败', 'error');
+    }
+}
+
+function closePosterPreview() {
+    elements.posterModal.classList.add('hidden');
+    elements.posterPreviewImage.src = '';
+    elements.posterSetBtn.disabled = true;
+    currentPosterCandidate = null;
+    currentPosterPreviewUrl = null;
+}
+
+async function setPosterFromFile() {
+    if (!currentPosterCandidate) {
+        return;
+    }
+
+    try {
+        await apiRequest(`${TORRENT_API}/poster`, {
+            method: 'POST',
+            body: JSON.stringify({
+                info_hash: currentPosterCandidate.infoHash,
+                file_index: currentPosterCandidate.fileIndex
+            })
+        });
+        showToast('已设置海报', 'success');
+        closePosterPreview();
+        loadLibrary();
+    } catch (error) {
+        showToast(error.message || '设置海报失败', 'error');
+    }
+}
+
 async function togglePublicFromPlayer(infoHash, isPublic) {
     await togglePublic(infoHash, isPublic);
     // 刷新分享按钮状态
@@ -1084,6 +1205,20 @@ function getLocalFileUrl(filePath) {
         // For original files, use the standard endpoint
         return `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
     }
+}
+
+async function getPreviewFileUrl(fileInfo, fileIndex, filePath) {
+    if (fileInfo && fileInfo.cloud_status === 3 && fileInfo.cloud_path) {
+        const idx = fileIndex >= 0 ? fileIndex : currentTorrentFiles.indexOf(fileInfo);
+        try {
+            const cloudData = await apiRequest(`${TORRENT_API}/cloud-url/${currentInfoHash}/${idx}`);
+            return cloudData.url;
+        } catch (error) {
+            console.warn('Failed to get cloud URL, falling back to local:', error);
+        }
+    }
+
+    return getLocalFileUrl(filePath);
 }
 
 async function playFile(filePath, originalPath = null, fileIndex = -1) {
@@ -1697,11 +1832,21 @@ function initEventListeners() {
         }
     });
 
+    // 海报预览
+    elements.posterModalBackdrop.addEventListener('click', closePosterPreview);
+    elements.posterModalClose.addEventListener('click', closePosterPreview);
+    elements.posterCancelBtn.addEventListener('click', closePosterPreview);
+    elements.posterSetBtn.addEventListener('click', setPosterFromFile);
+
     // 退出登录
     elements.logoutBtn.addEventListener('click', logout);
 
     // 键盘快捷键
     document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !elements.posterModal.classList.contains('hidden')) {
+            closePosterPreview();
+            return;
+        }
         if (e.key === 'Escape' && elements.pagePlayer.classList.contains('active')) {
             elements.videoPlayer.pause();
             elements.videoPlayer.src = '';

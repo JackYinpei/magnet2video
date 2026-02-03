@@ -32,6 +32,9 @@
   - `source`: `"original" | "transcoded" | "extracted"`
   - `parent_path`: 关联到原始文件(转码/字幕文件指向原视频)
 - `poster_path` 仍为独立字段(外部导入,不进入 `files`)
+  - `local://<relative_path>`: 本地文件(相对下载目录),由服务端解析为 `/api/v1/torrent/file/:hash/*path`
+  - `cloud://<object_path>`: 云存储对象路径,由服务端签名为可访问 URL
+  - `http(s)://...`: 外部直链,直接透传
 
 **注意**: 当前阶段不做数据迁移,历史记录中的 `subtitles`/`transcoded_path` 不会自动展开为独立条目。
 
@@ -561,6 +564,8 @@ POST /api/v1/torrent/pause/:hash          # 暂停下载
 POST /api/v1/torrent/resume/:hash         # 恢复下载
 POST /api/v1/torrent/remove/:hash         # 删除下载
 GET  /api/v1/torrent/list                 # 用户种子列表
+POST /api/v1/torrent/poster               # 设置海报(从已有图片文件)
+POST /api/v1/torrent/poster/upload        # 上传海报到云存储
 POST /api/v1/torrent/public/:hash         # 设置公开/私有
 POST /api/v1/torrent/transcode            # 手动触发转码
 GET  /api/v1/user/info                    # 用户信息
@@ -1353,5 +1358,5 @@ docker-compose down
 
 ---
 
-**最后更新**: 2025-02-01
+**最后更新**: 2026-02-03
 **维护者**: Done-0

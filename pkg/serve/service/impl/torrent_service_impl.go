@@ -5,6 +5,7 @@ package impl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
 	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
+	"github.com/Done-0/gin-scaffold/internal/types/consts"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
 	"github.com/Done-0/gin-scaffold/pkg/serve/service"
 	"github.com/Done-0/gin-scaffold/pkg/vo"
@@ -581,6 +583,97 @@ func (ts *TorrentServiceImpl) GetDownloadDir() string {
 	return ts.torrentManager.Client().GetDownloadDir()
 }
 
+// SetPosterFromFile sets poster from an existing torrent file
+func (ts *TorrentServiceImpl) SetPosterFromFile(c *gin.Context, req *dto.SetPosterRequest) (*vo.PosterResponse, error) {
+	userID := auth.GetUserID(c)
+	if userID == 0 {
+		return nil, errors.New("unauthorized")
+	}
+	if req == nil || req.InfoHash == "" || req.FileIndex == nil {
+		return nil, errors.New("invalid request")
+	}
+	fileIndex := *req.FileIndex
+	if fileIndex < 0 {
+		return nil, errors.New("file_index out of range")
+	}
+
+	var torrentRecord torrentModel.Torrent
+	result := ts.dbManager.DB().
+		Where("info_hash = ? AND creator_id = ? AND deleted = ?", req.InfoHash, userID, false).
+		First(&torrentRecord)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return nil, errors.New("torrent not found or not owned by you")
+	}
+	if result.Error != nil {
+		ts.loggerManager.Logger().Errorf("failed to find torrent: %v", result.Error)
+		return nil, result.Error
+	}
+
+	if fileIndex >= len(torrentRecord.Files) {
+		return nil, errors.New("file_index out of range")
+	}
+
+	file := torrentRecord.Files[fileIndex]
+	if !isPosterImage(file.Path) {
+		return nil, errors.New("poster file must be an image")
+	}
+
+	downloadDir := ts.torrentManager.Client().GetDownloadDir()
+	relPath := toRelativePath(file.Path, downloadDir)
+	if relPath == "" {
+		return nil, errors.New("invalid poster file path")
+	}
+
+	posterPath := consts.PosterPathLocalPrefix + relPath
+	if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted && file.CloudPath != "" {
+		posterPath = consts.PosterPathCloudPrefix + file.CloudPath
+	}
+	if err := ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentRecord.ID).
+		Update("poster_path", posterPath).Error; err != nil {
+		ts.loggerManager.Logger().Errorf("failed to update poster path: %v", err)
+		return nil, err
+	}
+
+	ts.invalidateTorrentListCache(userID)
+
+	return &vo.PosterResponse{
+		InfoHash:   req.InfoHash,
+		PosterPath: posterPath,
+		Message:    "Poster updated successfully",
+	}, nil
+}
+
+// UpdatePosterPath updates poster path directly (for uploads)
+func (ts *TorrentServiceImpl) UpdatePosterPath(c *gin.Context, infoHash string, posterPath string) (*vo.PosterResponse, error) {
+	userID := auth.GetUserID(c)
+	if userID == 0 {
+		return nil, errors.New("unauthorized")
+	}
+	if infoHash == "" || posterPath == "" {
+		return nil, errors.New("invalid request")
+	}
+
+	result := ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("info_hash = ? AND creator_id = ? AND deleted = ?", infoHash, userID, false).
+		Update("poster_path", posterPath)
+	if result.Error != nil {
+		ts.loggerManager.Logger().Errorf("failed to update poster path: %v", result.Error)
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, errors.New("torrent not found or not owned by you")
+	}
+
+	ts.invalidateTorrentListCache(userID)
+
+	return &vo.PosterResponse{
+		InfoHash:   infoHash,
+		PosterPath: posterPath,
+		Message:    "Poster updated successfully",
+	}, nil
+}
+
 // Helper functions
 
 // getFileSize returns the file size in bytes, or 0 if the file does not exist
@@ -607,6 +700,16 @@ func formatSize(bytes int64) string {
 
 func formatSpeed(bytesPerSec int64) string {
 	return formatSize(bytesPerSec) + "/s"
+}
+
+func isPosterImage(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		return true
+	default:
+		return false
+	}
 }
 
 // toRelativePath converts an absolute path to a relative path based on the download directory.

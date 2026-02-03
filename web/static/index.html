@@ -302,6 +302,25 @@
         </main>
     </div>
 
+    <!-- 海报预览 -->
+    <div id="poster-modal" class="modal hidden">
+        <div class="modal-backdrop" id="poster-modal-backdrop"></div>
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>海报预览</h3>
+                <button id="poster-modal-close" class="btn btn-sm">关闭</button>
+            </div>
+            <div class="poster-preview">
+                <img id="poster-preview-image" alt="poster preview">
+            </div>
+            <div class="poster-preview-name" id="poster-preview-name"></div>
+            <div class="modal-actions">
+                <button id="poster-set-btn" class="btn btn-primary btn-sm" disabled>设置成海报</button>
+                <button id="poster-cancel-btn" class="btn btn-sm">取消</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast 通知 -->
     <div id="toast" class="toast hidden"></div>
 

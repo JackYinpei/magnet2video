@@ -55,5 +55,11 @@ func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 
 		// List user's own torrents
 		protectedTorrent.GET("/list", container.TorrentController.ListTorrents)
+
+		// Set poster from existing file
+		protectedTorrent.POST("/poster", container.TorrentController.SetPoster)
+
+		// Upload poster to cloud storage
+		protectedTorrent.POST("/poster/upload", container.TorrentController.UploadPoster)
 	}
 }

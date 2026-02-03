@@ -40,4 +40,8 @@ type TorrentService interface {
 	GetFileStream(c *gin.Context, infoHash string, filePath string) (io.ReadSeeker, *vo.TorrentFileInfo, error)
 	// GetDownloadDir returns the download directory path
 	GetDownloadDir() string
+	// SetPosterFromFile sets poster from an existing torrent file
+	SetPosterFromFile(c *gin.Context, req *dto.SetPosterRequest) (*vo.PosterResponse, error)
+	// UpdatePosterPath updates poster path directly (for uploads)
+	UpdatePosterPath(c *gin.Context, infoHash string, posterPath string) (*vo.PosterResponse, error)
 }

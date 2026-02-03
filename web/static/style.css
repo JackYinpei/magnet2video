@@ -667,6 +667,29 @@ h2 {
     cursor: not-allowed;
 }
 
+.player-file-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.player-file-size {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+.btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+}
+
+.btn-ghost:hover {
+    background-color: var(--bg-primary);
+    transform: none;
+}
+
 /* 字幕选择器 */
 .subtitle-selector {
     background-color: var(--bg-tertiary);
@@ -858,6 +881,71 @@ video::cue {
 /* 隐藏 */
 .hidden {
     display: none !important;
+}
+
+/* Modal */
+.modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+}
+
+.modal-card {
+    position: relative;
+    z-index: 1;
+    width: min(720px, 92vw);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem 1.25rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+
+.poster-preview {
+    background: var(--bg-primary);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+}
+
+.poster-preview img {
+    max-width: 100%;
+    max-height: 60vh;
+    border-radius: var(--radius);
+    object-fit: contain;
+}
+
+.poster-preview-name {
+    margin-top: 0.75rem;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    word-break: break-all;
+}
+
+.modal-actions {
+    margin-top: 1rem;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
 }
 
 /* 响应式 */

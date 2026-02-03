@@ -5,7 +5,10 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,7 +20,9 @@ import (
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/cloud"
 	"github.com/Done-0/gin-scaffold/internal/db"
+	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
 	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
+	"github.com/Done-0/gin-scaffold/internal/types/consts"
 	"github.com/Done-0/gin-scaffold/internal/types/errno"
 	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
 	"github.com/Done-0/gin-scaffold/internal/utils/validator"
@@ -25,6 +30,7 @@ import (
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
 	"github.com/Done-0/gin-scaffold/pkg/serve/service"
 	pkgVo "github.com/Done-0/gin-scaffold/pkg/vo"
+	"gorm.io/gorm"
 )
 
 // TorrentController torrent HTTP controller
@@ -198,6 +204,10 @@ func (tc *TorrentController) ListTorrents(c *gin.Context) {
 		return
 	}
 
+	for i := range response.Torrents {
+		response.Torrents[i].PosterPath = tc.resolvePosterPath(response.Torrents[i].InfoHash, response.Torrents[i].PosterPath)
+	}
+
 	c.JSON(http.StatusOK, vo.Success(c, response))
 }
 
@@ -208,6 +218,10 @@ func (tc *TorrentController) ListPublicTorrents(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer, errorx.KV("msg", err.Error()))))
 		return
+	}
+
+	for i := range response.Torrents {
+		response.Torrents[i].PosterPath = tc.resolvePosterPath(response.Torrents[i].InfoHash, response.Torrents[i].PosterPath)
 	}
 
 	c.JSON(http.StatusOK, vo.Success(c, response))
@@ -228,6 +242,117 @@ func (tc *TorrentController) GetTorrentDetail(c *gin.Context) {
 		return
 	}
 
+	response.PosterPath = tc.resolvePosterPath(infoHash, response.PosterPath)
+
+	c.JSON(http.StatusOK, vo.Success(c, response))
+}
+
+// SetPoster handles setting poster from an existing file
+// @Router /api/v1/torrent/poster [post]
+func (tc *TorrentController) SetPoster(c *gin.Context) {
+	req := &dto.SetPosterRequest{}
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "bind JSON failed"))))
+		return
+	}
+
+	errors := validator.Validate(req)
+	if errors != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, errors, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "validation failed"))))
+		return
+	}
+
+	if req.FileIndex == nil || *req.FileIndex < 0 {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "file_index is required"))))
+		return
+	}
+
+	response, err := tc.torrentService.SetPosterFromFile(c, req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", err.Error()))))
+		return
+	}
+
+	response.PosterPath = tc.resolvePosterPath(response.InfoHash, response.PosterPath)
+	c.JSON(http.StatusOK, vo.Success(c, response))
+}
+
+// UploadPoster handles uploading a poster file to cloud storage
+// @Router /api/v1/torrent/poster/upload [post]
+func (tc *TorrentController) UploadPoster(c *gin.Context) {
+	if !tc.cloudStorageManager.IsEnabled() {
+		c.JSON(http.StatusServiceUnavailable, vo.Fail(c, nil, errorx.New(errno.ErrCloudStorageDisabled)))
+		return
+	}
+
+	infoHash := strings.TrimSpace(c.PostForm("info_hash"))
+	if infoHash == "" {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "info_hash is required"))))
+		return
+	}
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "poster file is required"))))
+		return
+	}
+	if fileHeader.Size <= 0 {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "poster file is empty"))))
+		return
+	}
+	if !isPosterImageFile(fileHeader.Filename) {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "poster file must be an image"))))
+		return
+	}
+
+	userID := auth.GetUserID(c)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, vo.Fail(c, nil, errorx.New(errno.ErrUnauthorized, errorx.KV("msg", "unauthorized"))))
+		return
+	}
+
+	// Ensure torrent exists and is owned by current user before uploading
+	var torrentRecord torrentModel.Torrent
+	if err := tc.dbManager.DB().
+		Select("id").
+		Where("info_hash = ? AND creator_id = ? AND deleted = ?", infoHash, userID, false).
+		First(&torrentRecord).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, vo.Fail(c, nil, errorx.New(errno.ErrResourceNotFound, errorx.KV("resource", "torrent"), errorx.KV("id", infoHash))))
+			return
+		}
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer, errorx.KV("msg", err.Error()))))
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer, errorx.KV("msg", "failed to open poster file"))))
+		return
+	}
+	defer file.Close()
+
+	objectPath := tc.buildPosterObjectPath(infoHash, fileHeader.Filename)
+	contentType := fileHeader.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = getContentType(fileHeader.Filename)
+	}
+
+	if err := tc.cloudStorageManager.Upload(context.Background(), objectPath, file, contentType); err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrCloudUploadFailed, errorx.KV("msg", err.Error()))))
+		return
+	}
+
+	posterPath := consts.PosterPathCloudPrefix + objectPath
+	response, err := tc.torrentService.UpdatePosterPath(c, infoHash, posterPath)
+	if err != nil {
+		_ = tc.cloudStorageManager.Delete(context.Background(), objectPath)
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", err.Error()))))
+		return
+	}
+
+	response.PosterPath = tc.resolvePosterPath(infoHash, response.PosterPath)
+	response.CloudPath = objectPath
 	c.JSON(http.StatusOK, vo.Success(c, response))
 }
 
@@ -255,7 +380,7 @@ func (tc *TorrentController) ServeFile(c *gin.Context) {
 	// Set headers
 	c.Header("Content-Type", contentType)
 	c.Header("Content-Disposition", "inline; filename=\""+filepath.Base(fileInfo.Path)+"\"")
-	
+
 	// Delegate to http.ServeContent which handles Range requests and multipart ranges automatically
 	// We use a zero time for ModTime to avoid caching issues with changing content,
 	// or we could use the torrent creation time if available.
@@ -337,6 +462,7 @@ func getContentType(filePath string) string {
 		".png":  "image/png",
 		".gif":  "image/gif",
 		".webp": "image/webp",
+		".bmp":  "image/bmp",
 		".pdf":  "application/pdf",
 		".zip":  "application/zip",
 		".rar":  "application/x-rar-compressed",
@@ -352,6 +478,65 @@ func getContentType(filePath string) string {
 		return ct
 	}
 	return "application/octet-stream"
+}
+
+func (tc *TorrentController) resolvePosterPath(infoHash string, posterPath string) string {
+	if posterPath == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(posterPath, "http://") || strings.HasPrefix(posterPath, "https://") {
+		return posterPath
+	}
+
+	if strings.HasPrefix(posterPath, consts.PosterPathLocalPrefix) {
+		relPath := strings.TrimPrefix(posterPath, consts.PosterPathLocalPrefix)
+		return tc.buildLocalPosterURL(infoHash, relPath)
+	}
+
+	if strings.HasPrefix(posterPath, consts.PosterPathCloudPrefix) {
+		if !tc.cloudStorageManager.IsEnabled() {
+			return ""
+		}
+		objectPath := strings.TrimPrefix(posterPath, consts.PosterPathCloudPrefix)
+		expiration := tc.cloudStorageManager.GetSignedURLExpiration()
+		signedURL, err := tc.cloudStorageManager.GenerateSignedURL(context.Background(), objectPath, expiration)
+		if err != nil {
+			return ""
+		}
+		return signedURL
+	}
+
+	if strings.HasPrefix(posterPath, "/") {
+		return posterPath
+	}
+
+	return tc.buildLocalPosterURL(infoHash, posterPath)
+}
+
+func (tc *TorrentController) buildLocalPosterURL(infoHash string, relPath string) string {
+	escaped := url.PathEscape(relPath)
+	return fmt.Sprintf("/api/v1/torrent/file/%s/%s", infoHash, escaped)
+}
+
+func (tc *TorrentController) buildPosterObjectPath(infoHash string, filename string) string {
+	prefix := tc.cloudStorageManager.GetPathPrefix()
+	if prefix == "" {
+		prefix = "torrents"
+	}
+	cleanName := filepath.Base(filename)
+	timestamp := time.Now().UnixNano()
+	return fmt.Sprintf("%s/posters/%s/%d_%s", prefix, infoHash, timestamp, cleanName)
+}
+
+func isPosterImageFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetCloudURL handles generating a signed cloud URL for a file
