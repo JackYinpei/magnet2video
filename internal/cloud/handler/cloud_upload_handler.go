@@ -56,6 +56,24 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 	h.loggerManager.Logger().Infof("Processing cloud upload: torrentID=%d, fileIndex=%d, subtitleIndex=%d, retry=%d, path=%s",
 		uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.SubtitleIndex, uploadMsg.RetryCount, uploadMsg.LocalPath)
 
+	// Skip upload if object already exists in cloud storage
+	if uploadMsg.CloudPath != "" && h.cloudStorageManager != nil && h.cloudStorageManager.IsEnabled() {
+		exists, err := h.cloudStorageManager.Exists(ctx, uploadMsg.CloudPath)
+		if err != nil {
+			h.loggerManager.Logger().Warnf("failed to check cloud object existence: %v", err)
+		} else if exists {
+			if err := h.updateTorrentFileCloudCompleted(uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.CloudPath); err != nil {
+				h.loggerManager.Logger().Errorf("failed to update existing cloud upload status: %v", err)
+			}
+			if err := h.checkAndUpdateTorrentCloudStatus(uploadMsg.TorrentID); err != nil {
+				h.loggerManager.Logger().Errorf("failed to update torrent cloud status: %v", err)
+			}
+			h.loggerManager.Logger().Infof("Cloud object already exists, skip upload: torrentID=%d, fileIndex=%d, cloudPath=%s",
+				uploadMsg.TorrentID, uploadMsg.FileIndex, uploadMsg.CloudPath)
+			return nil
+		}
+	}
+
 	// Update file cloud upload status to uploading
 	if err := h.updateTorrentFileCloudStatus(uploadMsg.TorrentID, uploadMsg.FileIndex, torrentModel.CloudUploadStatusUploading, ""); err != nil {
 		h.loggerManager.Logger().Errorf("failed to update cloud upload status: %v", err)
@@ -182,10 +200,13 @@ func (h *CloudUploadHandler) updateTorrentFileCloudCompleted(torrentID int64, fi
 	}
 
 	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
+		prevStatus := torrentRecord.Files[fileIndex].CloudUploadStatus
 		torrentRecord.Files[fileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusCompleted
 		torrentRecord.Files[fileIndex].CloudPath = cloudPath
 		torrentRecord.Files[fileIndex].CloudUploadError = ""
-		torrentRecord.CloudUploadedCount++
+		if prevStatus != torrentModel.CloudUploadStatusCompleted {
+			torrentRecord.CloudUploadedCount++
+		}
 	}
 
 	return h.dbManager.DB().Save(&torrentRecord).Error
@@ -199,7 +220,14 @@ func (h *CloudUploadHandler) checkAndUpdateTorrentCloudStatus(torrentID int64) e
 	}
 
 	var pending, uploading, completed, failed int
+	var total, uploaded int
 	for _, file := range torrentRecord.Files {
+		if file.CloudUploadStatus != torrentModel.CloudUploadStatusNone {
+			total++
+		}
+		if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted {
+			uploaded++
+		}
 		switch file.CloudUploadStatus {
 		case torrentModel.CloudUploadStatusPending:
 			pending++
@@ -211,6 +239,10 @@ func (h *CloudUploadHandler) checkAndUpdateTorrentCloudStatus(torrentID int64) e
 			failed++
 		}
 	}
+
+	// Keep counters consistent with current file states
+	torrentRecord.TotalCloudUpload = total
+	torrentRecord.CloudUploadedCount = uploaded
 
 	// Determine overall status
 	if uploading > 0 {
