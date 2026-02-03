@@ -11,28 +11,22 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/model/base"
 )
 
-// SubtitleInfo represents an extracted subtitle file associated with a torrent file
-type SubtitleInfo struct {
-	StreamIndex   int    `json:"stream_index"`    // FFmpeg stream index
-	Language      string `json:"language"`         // ISO 639-2 language code (eng, chi, jpn)
-	LanguageName  string `json:"language_name"`    // Human-readable name (English, Chinese)
-	Title         string `json:"title"`            // Subtitle title/label
-	Format        string `json:"format"`           // Output format: srt, ass, vtt
-	OriginalCodec string `json:"original_codec"`   // Original codec: subrip, ass, mov_text
-	FilePath      string `json:"file_path"`        // Local file path
-	CloudPath     string `json:"cloud_path"`       // Cloud storage object path
-	FileSize      int64  `json:"file_size"`        // File size in bytes
-}
-
 // TorrentFile represents a single file in a torrent
 type TorrentFile struct {
-	Path            string `json:"path"`             // File path within the torrent
-	Size            int64  `json:"size"`             // File size in bytes
-	IsSelected      bool   `json:"is_selected"`      // Whether the file is selected for download
-	IsShareable     bool   `json:"is_shareable"`     // Whether the file can be shared
-	IsStreamable    bool   `json:"is_streamable"`    // Whether the file can be streamed in browser (H.264)
+	Path         string `json:"path"`          // File path within the torrent or absolute path for derived files
+	Size         int64  `json:"size"`          // File size in bytes
+	IsSelected   bool   `json:"is_selected"`   // Whether the file is selected for download
+	IsShareable  bool   `json:"is_shareable"`  // Whether the file can be shared
+	IsStreamable bool   `json:"is_streamable"` // Whether the file can be streamed in browser (H.264)
+
+	// Unified file metadata
+	Type       string `json:"type"`        // File type: "video", "subtitle", "other"
+	Source     string `json:"source"`      // File source: "original", "transcoded", "extracted"
+	ParentPath string `json:"parent_path"` // Parent file path (for transcoded/subtitle files)
+
+	// Transcode fields (kept for backward compatibility on original files)
 	TranscodeStatus int    `json:"transcode_status"` // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
-	TranscodedPath  string `json:"transcoded_path"`  // Path to the transcoded file
+	TranscodedPath  string `json:"transcoded_path"`  // Path to the transcoded file (legacy)
 	TranscodeError  string `json:"transcode_error"`  // Transcode error message if failed
 
 	// Cloud Storage fields
@@ -40,8 +34,13 @@ type TorrentFile struct {
 	CloudPath         string `json:"cloud_path"`          // Cloud storage object path
 	CloudUploadError  string `json:"cloud_upload_error"`  // Cloud upload error message if failed
 
-	// Subtitle fields
-	Subtitles []SubtitleInfo `json:"subtitles"` // Extracted subtitle files
+	// Subtitle metadata (when Type == "subtitle")
+	StreamIndex   int    `json:"stream_index"`   // FFmpeg stream index
+	Language      string `json:"language"`       // ISO 639-2 language code (eng, chi, jpn)
+	LanguageName  string `json:"language_name"`  // Human-readable name (English, Chinese)
+	Title         string `json:"title"`          // Subtitle title/label
+	Format        string `json:"format"`         // Output format: srt, ass, vtt
+	OriginalCodec string `json:"original_codec"` // Original codec: subrip, ass, mov_text
 }
 
 // Transcode status constants for TorrentFile
@@ -86,21 +85,21 @@ func (tf TorrentFiles) Value() (driver.Value, error) {
 // Torrent represents a torrent download record
 type Torrent struct {
 	base.Base
-	InfoHash          string       `gorm:"type:varchar(64);unique;not null;index" json:"info_hash"`  // Torrent info hash
-	Name              string       `gorm:"type:varchar(512)" json:"name"`                            // Torrent name
-	TotalSize         int64        `gorm:"type:bigint;default:0" json:"total_size"`                  // Total size in bytes
-	Files             TorrentFiles `gorm:"type:json" json:"files"`                                   // Files in the torrent
-	PosterPath        string       `gorm:"type:varchar(512)" json:"poster_path"`                     // Poster file path or URL
-	DownloadPath      string       `gorm:"type:varchar(512)" json:"download_path"`                   // Download directory path
-	Status            int          `gorm:"type:int;default:0" json:"status"`                         // Download status: 0=pending, 1=downloading, 2=completed, 3=failed, 4=paused
-	Progress          float64      `gorm:"type:decimal(5,2);default:0" json:"progress"`              // Download progress percentage
-	Trackers          StringSlice  `gorm:"type:json" json:"trackers"`                                // Custom trackers
-	CreatorID         int64        `gorm:"type:bigint;default:0;index" json:"creator_id"`            // Creator user ID (0 if no user system)
-	IsPublic          bool         `gorm:"type:tinyint(1);default:0" json:"is_public"`               // Whether the torrent is publicly shared
-	TranscodeStatus   int          `gorm:"type:int;default:0" json:"transcode_status"`               // Overall transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
-	TranscodeProgress int          `gorm:"type:int;default:0" json:"transcode_progress"`             // Transcode progress percentage (0-100)
-	TranscodedCount   int          `gorm:"type:int;default:0" json:"transcoded_count"`               // Number of transcoded files
-	TotalTranscode    int          `gorm:"type:int;default:0" json:"total_transcode"`                // Total number of files to transcode
+	InfoHash          string       `gorm:"type:varchar(64);unique;not null;index" json:"info_hash"` // Torrent info hash
+	Name              string       `gorm:"type:varchar(512)" json:"name"`                           // Torrent name
+	TotalSize         int64        `gorm:"type:bigint;default:0" json:"total_size"`                 // Total size in bytes
+	Files             TorrentFiles `gorm:"type:json" json:"files"`                                  // Files in the torrent
+	PosterPath        string       `gorm:"type:varchar(512)" json:"poster_path"`                    // Poster file path or URL
+	DownloadPath      string       `gorm:"type:varchar(512)" json:"download_path"`                  // Download directory path
+	Status            int          `gorm:"type:int;default:0" json:"status"`                        // Download status: 0=pending, 1=downloading, 2=completed, 3=failed, 4=paused
+	Progress          float64      `gorm:"type:decimal(5,2);default:0" json:"progress"`             // Download progress percentage
+	Trackers          StringSlice  `gorm:"type:json" json:"trackers"`                               // Custom trackers
+	CreatorID         int64        `gorm:"type:bigint;default:0;index" json:"creator_id"`           // Creator user ID (0 if no user system)
+	IsPublic          bool         `gorm:"type:tinyint(1);default:0" json:"is_public"`              // Whether the torrent is publicly shared
+	TranscodeStatus   int          `gorm:"type:int;default:0" json:"transcode_status"`              // Overall transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
+	TranscodeProgress int          `gorm:"type:int;default:0" json:"transcode_progress"`            // Transcode progress percentage (0-100)
+	TranscodedCount   int          `gorm:"type:int;default:0" json:"transcoded_count"`              // Number of transcoded files
+	TotalTranscode    int          `gorm:"type:int;default:0" json:"total_transcode"`               // Total number of files to transcode
 
 	// Cloud Storage overall status
 	CloudUploadStatus   int `gorm:"type:int;default:0" json:"cloud_upload_status"`   // Overall cloud upload status

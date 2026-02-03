@@ -22,6 +22,21 @@
 
 ---
 
+## Torrent 文件模型(扁平化)
+
+当前设计统一采用 **扁平 `files` 列表**,不再使用“主文件 + subtitles 嵌套”结构:
+
+- `files[]` 中每条记录都代表一个实体文件(原始/转码/字幕)
+- 字段:
+  - `type`: `"video" | "subtitle" | "other"`
+  - `source`: `"original" | "transcoded" | "extracted"`
+  - `parent_path`: 关联到原始文件(转码/字幕文件指向原视频)
+- `poster_path` 仍为独立字段(外部导入,不进入 `files`)
+
+**注意**: 当前阶段不做数据迁移,历史记录中的 `subtitles`/`transcoded_path` 不会自动展开为独立条目。
+
+---
+
 ## 开发命令
 
 ### 运行应用

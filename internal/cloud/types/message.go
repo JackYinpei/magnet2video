@@ -13,7 +13,7 @@ type CloudUploadMessage struct {
 	TorrentID     int64  `json:"torrent_id"`     // Torrent ID
 	InfoHash      string `json:"info_hash"`      // Torrent info hash
 	FileIndex     int    `json:"file_index"`     // File index in torrent
-	SubtitleIndex int    `json:"subtitle_index"` // Subtitle index (-1 if not a subtitle)
+	SubtitleIndex int    `json:"subtitle_index"` // Deprecated: use file_index in flat files (set to -1)
 	LocalPath     string `json:"local_path"`     // Local file path to upload
 	CloudPath     string `json:"cloud_path"`     // Target cloud object path
 	ContentType   string `json:"content_type"`   // File content type

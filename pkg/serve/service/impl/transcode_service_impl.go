@@ -20,8 +20,8 @@ import (
 	cloudTypes "github.com/Done-0/gin-scaffold/internal/cloud/types"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/logger"
-	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
 	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
+	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
 	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
 	"github.com/Done-0/gin-scaffold/internal/transcode/ffmpeg"
@@ -83,6 +83,9 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 	// Check each file for transcoding needs
 	for i, file := range torrentRecord.Files {
 		if !file.IsSelected {
+			continue
+		}
+		if file.Source != "" && file.Source != "original" {
 			continue
 		}
 
@@ -221,11 +224,14 @@ func (ts *TranscodeServiceImpl) GetTranscodeStatus(c *gin.Context, torrentID int
 	var jobs []transcodeModel.TranscodeJob
 	ts.dbManager.DB().Where("torrent_id = ?", torrentID).Order("created_at DESC").Find(&jobs)
 
-	// Build file info
-	files := make([]vo.TranscodeFileInfo, len(torrentRecord.Files))
+	// Build file info (original files only)
+	files := make([]vo.TranscodeFileInfo, 0, len(torrentRecord.Files))
 	var transcodeFiles, completedFiles int
 
 	for i, file := range torrentRecord.Files {
+		if file.Source != "" && file.Source != "original" {
+			continue
+		}
 		needsTranscode := ffmpeg.NeedsTranscoding(file.Path)
 		if needsTranscode {
 			transcodeFiles++
@@ -234,14 +240,14 @@ func (ts *TranscodeServiceImpl) GetTranscodeStatus(c *gin.Context, torrentID int
 			completedFiles++
 		}
 
-		files[i] = vo.TranscodeFileInfo{
+		files = append(files, vo.TranscodeFileInfo{
 			FileIndex:       i,
 			FilePath:        file.Path,
 			TranscodeStatus: file.TranscodeStatus,
 			TranscodedPath:  file.TranscodedPath,
 			TranscodeError:  file.TranscodeError,
 			NeedsTranscode:  needsTranscode,
-		}
+		})
 	}
 
 	// Build job info
@@ -436,15 +442,16 @@ func (ts *TranscodeServiceImpl) queueCloudUpload(torrentID int64, infoHash strin
 	}
 
 	msg := cloudTypes.CloudUploadMessage{
-		TorrentID:    torrentID,
-		InfoHash:     infoHash,
-		FileIndex:    fileIndex,
-		LocalPath:    localPath,
-		CloudPath:    cloudPath,
-		ContentType:  contentType,
-		FileSize:     fileSize,
-		IsTranscoded: isTranscoded,
-		CreatorID:    creatorID,
+		TorrentID:     torrentID,
+		InfoHash:      infoHash,
+		FileIndex:     fileIndex,
+		SubtitleIndex: -1,
+		LocalPath:     localPath,
+		CloudPath:     cloudPath,
+		ContentType:   contentType,
+		FileSize:      fileSize,
+		IsTranscoded:  isTranscoded,
+		CreatorID:     creatorID,
 	}
 
 	msgBytes, err := json.Marshal(msg)

@@ -159,12 +159,16 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 	// Convert to model files with selection status
 	files := make(torrentModel.TorrentFiles, len(torrentInfo.Files))
 	for i, f := range torrentInfo.Files {
+		fileType := torrentModel.DetectFileType(f.Path)
 		files[i] = torrentModel.TorrentFile{
 			Path:         f.Path,
 			Size:         f.Size,
 			IsSelected:   selectedMap[i],
 			IsShareable:  false,
 			IsStreamable: f.IsStreamable,
+			Type:         fileType,
+			Source:       "original",
+			ParentPath:   "",
 		}
 	}
 
@@ -476,7 +480,7 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 }
 
 // GetTorrentDetail gets detailed information about a torrent
-// Returns a flattened file list including original files, transcoded videos, and extracted subtitles
+// Returns a flat file list stored in the torrent record
 func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) (*vo.TorrentDetailResponse, error) {
 	var t torrentModel.Torrent
 
@@ -488,65 +492,50 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 
 	downloadDir := ts.torrentManager.Client().GetDownloadDir()
 
-	// Build flattened file list
-	var allFiles []vo.TorrentFileInfo
-	fileIndex := 0
-
-	for _, f := range t.Files {
-		// 1. Add original file
-		fileType := determineFileType(f.Path)
-		allFiles = append(allFiles, vo.TorrentFileInfo{
-			Index:           fileIndex,
-			Path:            f.Path,
+	// Build flat file list directly from stored files
+	allFiles := make([]vo.TorrentFileInfo, len(t.Files))
+	pathToIndex := make(map[string]int)
+	for i, f := range t.Files {
+		fileType := f.Type
+		if fileType == "" {
+			fileType = torrentModel.DetectFileType(f.Path)
+		}
+		source := f.Source
+		if source == "" {
+			source = "original"
+		}
+		relPath := toRelativePath(f.Path, downloadDir)
+		parentPath := f.ParentPath
+		if parentPath != "" {
+			parentPath = toRelativePath(parentPath, downloadDir)
+		}
+		allFiles[i] = vo.TorrentFileInfo{
+			Index:           i,
+			Path:            relPath,
 			Size:            f.Size,
 			SizeReadable:    formatSize(f.Size),
 			Type:            fileType,
-			Source:          "original",
+			Source:          source,
+			ParentPath:      parentPath,
 			OriginalIndex:   -1,
 			IsStreamable:    f.IsStreamable,
 			TranscodeStatus: f.TranscodeStatus,
+			Language:        f.Language,
+			LanguageName:    f.LanguageName,
+			Title:           f.Title,
 			CloudPath:       f.CloudPath,
 			CloudStatus:     f.CloudUploadStatus,
-		})
-		originalIndex := fileIndex
-		fileIndex++
-
-		// 2. Add transcoded file (if exists and completed)
-		if f.TranscodedPath != "" && f.TranscodeStatus == torrentModel.TranscodeStatusCompleted {
-			transcodedRelPath := toRelativePath(f.TranscodedPath, downloadDir)
-			transcodedSize := getFileSize(f.TranscodedPath)
-			allFiles = append(allFiles, vo.TorrentFileInfo{
-				Index:         fileIndex,
-				Path:          transcodedRelPath,
-				Size:          transcodedSize,
-				SizeReadable:  formatSize(transcodedSize),
-				Type:          "video",
-				Source:        "transcoded",
-				OriginalIndex: originalIndex,
-				IsStreamable:  true,
-				CloudPath:     "", // TODO: get transcoded file cloud path if available
-				CloudStatus:   0,
-			})
-			fileIndex++
 		}
-
-		// 3. Add extracted subtitles
-		for _, sub := range f.Subtitles {
-			allFiles = append(allFiles, vo.TorrentFileInfo{
-				Index:         fileIndex,
-				Path:          toRelativePath(sub.FilePath, downloadDir),
-				Size:          sub.FileSize,
-				SizeReadable:  formatSize(sub.FileSize),
-				Type:          "subtitle",
-				Source:        "extracted",
-				OriginalIndex: originalIndex,
-				Language:      sub.Language,
-				LanguageName:  sub.LanguageName,
-				Title:         sub.Title,
-				CloudPath:     sub.CloudPath,
-				CloudStatus:   0, // Subtitles don't have independent cloud status yet
-			})
-			fileIndex++
+		if source == "original" || f.ParentPath == "" {
+			pathToIndex[f.Path] = i
+		}
+	}
+	for i := range allFiles {
+		if t.Files[i].ParentPath == "" {
+			continue
+		}
+		if idx, ok := pathToIndex[t.Files[i].ParentPath]; ok {
+			allFiles[i].OriginalIndex = idx
 		}
 	}
 
@@ -593,25 +582,6 @@ func (ts *TorrentServiceImpl) GetDownloadDir() string {
 }
 
 // Helper functions
-
-// determineFileType returns the file type based on extension
-func determineFileType(path string) string {
-	ext := strings.ToLower(filepath.Ext(path))
-	videoExts := map[string]bool{".mkv": true, ".mp4": true, ".avi": true, ".mov": true, ".wmv": true, ".flv": true, ".webm": true, ".m4v": true, ".ts": true}
-	audioExts := map[string]bool{".mp3": true, ".flac": true, ".wav": true, ".aac": true, ".ogg": true, ".m4a": true, ".wma": true}
-	subtitleExts := map[string]bool{".srt": true, ".ass": true, ".ssa": true, ".vtt": true, ".sub": true}
-
-	switch {
-	case videoExts[ext]:
-		return "video"
-	case audioExts[ext]:
-		return "audio"
-	case subtitleExts[ext]:
-		return "subtitle"
-	default:
-		return "other"
-	}
-}
 
 // getFileSize returns the file size in bytes, or 0 if the file does not exist
 func getFileSize(path string) int64 {

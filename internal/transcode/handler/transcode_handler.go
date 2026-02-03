@@ -16,8 +16,8 @@ import (
 	cloudTypes "github.com/Done-0/gin-scaffold/internal/cloud/types"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/logger"
-	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
 	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
+	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
 	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/transcode/ffmpeg"
 	"github.com/Done-0/gin-scaffold/internal/transcode/types"
@@ -123,8 +123,9 @@ func (h *TranscodeHandler) Handle(ctx context.Context, msg *queue.Message) error
 		h.loggerManager.Logger().Errorf("failed to update job completion: %v", err)
 	}
 
-	// Update torrent file with transcoded path
-	if err := h.updateTorrentFileTranscoded(transcodeMsg.TorrentID, transcodeMsg.FileIndex, transcodeMsg.OutputPath); err != nil {
+	// Update torrent file with transcoded path and append transcoded file entry
+	transcodedIndex, err := h.updateTorrentFileTranscoded(transcodeMsg.TorrentID, transcodeMsg.FileIndex, transcodeMsg.OutputPath, outputSize)
+	if err != nil {
 		h.loggerManager.Logger().Errorf("failed to update torrent file: %v", err)
 	}
 
@@ -142,8 +143,8 @@ func (h *TranscodeHandler) Handle(ctx context.Context, msg *queue.Message) error
 		transcodeMsg.JobID, duration, outputSize)
 
 	// Trigger cloud upload if enabled
-	if h.config.CloudStorageConfig.Enabled && outputInfo != nil {
-		h.queueCloudUpload(ctx, transcodeMsg.TorrentID, transcodeMsg.InfoHash, transcodeMsg.FileIndex,
+	if h.config.CloudStorageConfig.Enabled && outputInfo != nil && transcodedIndex >= 0 {
+		h.queueCloudUpload(ctx, transcodeMsg.TorrentID, transcodeMsg.InfoHash, transcodedIndex,
 			transcodeMsg.OutputPath, outputInfo.Size(), true, transcodeMsg.CreatorID)
 	}
 
@@ -216,6 +217,9 @@ func (h *TranscodeHandler) updateTorrentProgress(torrentID int64, fileIndex int,
 	var totalProgress int
 	var count int
 	for _, file := range torrentRecord.Files {
+		if file.Source != "" && file.Source != "original" {
+			continue
+		}
 		if file.TranscodeStatus == torrentModel.TranscodeStatusProcessing ||
 			file.TranscodeStatus == torrentModel.TranscodeStatusPending {
 			count++
@@ -233,11 +237,12 @@ func (h *TranscodeHandler) updateTorrentProgress(torrentID int64, fileIndex int,
 	return h.dbManager.DB().Save(&torrentRecord).Error
 }
 
-// updateTorrentFileTranscoded updates the torrent file with transcoded path
-func (h *TranscodeHandler) updateTorrentFileTranscoded(torrentID int64, fileIndex int, transcodedPath string) error {
+// updateTorrentFileTranscoded updates the original torrent file and appends a transcoded file entry.
+// Returns the index of the new transcoded file entry.
+func (h *TranscodeHandler) updateTorrentFileTranscoded(torrentID int64, fileIndex int, transcodedPath string, outputSize int64) (int, error) {
 	var torrentRecord torrentModel.Torrent
 	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
-		return err
+		return -1, err
 	}
 
 	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
@@ -245,9 +250,25 @@ func (h *TranscodeHandler) updateTorrentFileTranscoded(torrentID int64, fileInde
 		torrentRecord.Files[fileIndex].TranscodedPath = transcodedPath
 		torrentRecord.Files[fileIndex].TranscodeError = ""
 		torrentRecord.TranscodedCount++
+		parentPath := torrentRecord.Files[fileIndex].Path
+		torrentRecord.Files = append(torrentRecord.Files, torrentModel.TorrentFile{
+			Path:         transcodedPath,
+			Size:         outputSize,
+			IsSelected:   true,
+			IsShareable:  false,
+			IsStreamable: true,
+			Type:         "video",
+			Source:       "transcoded",
+			ParentPath:   parentPath,
+		})
+		newIndex := len(torrentRecord.Files) - 1
+		if err := h.dbManager.DB().Save(&torrentRecord).Error; err != nil {
+			return -1, err
+		}
+		return newIndex, nil
 	}
 
-	return h.dbManager.DB().Save(&torrentRecord).Error
+	return -1, h.dbManager.DB().Save(&torrentRecord).Error
 }
 
 // updateTorrentFileStatus updates the torrent file transcode status
@@ -276,6 +297,9 @@ func (h *TranscodeHandler) checkAndUpdateTorrentTranscodeStatus(torrentID int64)
 
 	var pending, processing, completed, failed int
 	for _, file := range torrentRecord.Files {
+		if file.Source != "" && file.Source != "original" {
+			continue
+		}
 		switch file.TranscodeStatus {
 		case torrentModel.TranscodeStatusPending:
 			pending++
@@ -387,7 +411,7 @@ func (h *TranscodeHandler) extractSubtitles(ctx context.Context, msg types.Trans
 	return results
 }
 
-// saveSubtitleInfo saves extracted subtitle info to the torrent record and queues cloud uploads
+// saveSubtitleInfo saves extracted subtitle info as flat file entries and queues cloud uploads
 func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results []ffmpeg.SubtitleExtractResult) {
 	var torrentRecord torrentModel.Torrent
 	if err := h.dbManager.DB().Where("id = ?", msg.TorrentID).First(&torrentRecord).Error; err != nil {
@@ -399,33 +423,51 @@ func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results 
 		return
 	}
 
-	var subtitles []torrentModel.SubtitleInfo
-	for i, r := range results {
-		subtitles = append(subtitles, torrentModel.SubtitleInfo{
+	parentPath := torrentRecord.Files[msg.FileIndex].Path
+	type queuedSubtitle struct {
+		index  int
+		result ffmpeg.SubtitleExtractResult
+	}
+	var queued []queuedSubtitle
+
+	for _, r := range results {
+		torrentRecord.Files = append(torrentRecord.Files, torrentModel.TorrentFile{
+			Path:          r.FilePath,
+			Size:          r.FileSize,
+			IsSelected:    true,
+			IsShareable:   false,
+			IsStreamable:  false,
+			Type:          "subtitle",
+			Source:        "extracted",
+			ParentPath:    parentPath,
 			StreamIndex:   r.StreamIndex,
 			Language:      r.Language,
 			LanguageName:  r.LanguageName,
 			Title:         r.Title,
 			Format:        r.Format,
 			OriginalCodec: r.OriginalCodec,
-			FilePath:      r.FilePath,
-			FileSize:      r.FileSize,
 		})
-
-		// Queue cloud upload for each subtitle file
-		if h.config.CloudStorageConfig.Enabled && h.queueProducer != nil {
-			h.queueSubtitleCloudUpload(context.Background(), msg, r, i)
-		}
+		newIndex := len(torrentRecord.Files) - 1
+		queued = append(queued, queuedSubtitle{
+			index:  newIndex,
+			result: r,
+		})
 	}
 
-	torrentRecord.Files[msg.FileIndex].Subtitles = subtitles
 	if err := h.dbManager.DB().Save(&torrentRecord).Error; err != nil {
 		h.loggerManager.Logger().Errorf("failed to save subtitle info: %v", err)
+		return
+	}
+
+	for _, q := range queued {
+		if h.config.CloudStorageConfig.Enabled && h.queueProducer != nil {
+			h.queueSubtitleCloudUpload(context.Background(), msg, q.result, q.index)
+		}
 	}
 }
 
 // queueSubtitleCloudUpload sends a cloud upload job for a subtitle file
-func (h *TranscodeHandler) queueSubtitleCloudUpload(ctx context.Context, msg types.TranscodeMessage, result ffmpeg.SubtitleExtractResult, subtitleIndex int) {
+func (h *TranscodeHandler) queueSubtitleCloudUpload(ctx context.Context, msg types.TranscodeMessage, result ffmpeg.SubtitleExtractResult, fileIndex int) {
 	pathPrefix := h.config.CloudStorageConfig.PathPrefix
 	if pathPrefix == "" {
 		pathPrefix = "torrents"
@@ -443,11 +485,14 @@ func (h *TranscodeHandler) queueSubtitleCloudUpload(ctx context.Context, msg typ
 		contentType = "text/vtt"
 	}
 
+	// Mark subtitle file as pending
+	h.updateTorrentFileCloudPending(msg.TorrentID, fileIndex)
+
 	uploadMsg := cloudTypes.CloudUploadMessage{
 		TorrentID:     msg.TorrentID,
 		InfoHash:      msg.InfoHash,
-		FileIndex:     msg.FileIndex,
-		SubtitleIndex: subtitleIndex,
+		FileIndex:     fileIndex,
+		SubtitleIndex: -1,
 		LocalPath:     result.FilePath,
 		CloudPath:     cloudPath,
 		ContentType:   contentType,

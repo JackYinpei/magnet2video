@@ -20,8 +20,9 @@ type TorrentFileInfo struct {
 	Path            string `json:"path"`                       // File path (relative to download dir)
 	Size            int64  `json:"size"`                       // File size in bytes
 	SizeReadable    string `json:"size_readable"`              // Human readable size
-	Type            string `json:"type"`                       // File type: "video", "audio", "subtitle", "other"
+	Type            string `json:"type"`                       // File type: "video", "subtitle", "other"
 	Source          string `json:"source"`                     // Source: "original", "transcoded", "extracted"
+	ParentPath      string `json:"parent_path"`                // Parent file path (for derived files)
 	OriginalIndex   int    `json:"original_index"`             // Original file index (-1 for original files)
 	IsStreamable    bool   `json:"is_streamable"`              // Whether the file can be streamed directly
 	TranscodeStatus int    `json:"transcode_status,omitempty"` // Transcode status (only for original video files): 0=none, 1=pending, 2=processing, 3=completed, 4=failed
