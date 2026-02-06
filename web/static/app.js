@@ -518,6 +518,11 @@ async function loadPublicLibrary() {
     }
 }
 
+function getVisibilityText(visibility) {
+    const map = { 0: '私有', 1: '内部公开', 2: '公开' };
+    return map[visibility] || '私有';
+}
+
 function renderLibrary(torrents, container, isOwner) {
     if (torrents.length === 0) {
         container.innerHTML = `
@@ -528,7 +533,15 @@ function renderLibrary(torrents, container, isOwner) {
         return;
     }
 
-    container.innerHTML = torrents.map(torrent => `
+    container.innerHTML = torrents.map(torrent => {
+        const v = torrent.visibility || 0;
+        let badge = '';
+        if (v === 2) {
+            badge = '<span class="poster-public-badge">公开</span>';
+        } else if (v === 1) {
+            badge = '<span class="poster-internal-badge">内部</span>';
+        }
+        return `
         <div class="poster-card" data-infohash="${torrent.info_hash}">
             <div class="poster-image">
                 ${torrent.poster_path
@@ -539,7 +552,7 @@ function renderLibrary(torrents, container, isOwner) {
                 <div class="poster-title" title="${torrent.name}">${torrent.name}</div>
                 <div class="poster-meta">
                     ${formatSize(torrent.total_size)} · ${getStatusText(torrent.status)}
-                    ${torrent.is_public ? '<span class="poster-public-badge">公开</span>' : ''}
+                    ${badge}
                 </div>
                 ${torrent.status !== 2 ? `
                     <div class="poster-progress">
@@ -548,7 +561,7 @@ function renderLibrary(torrents, container, isOwner) {
                 ` : ''}
             </div>
         </div>
-    `).join('');
+    `}).join('');
 
     // 绑定点击事件
     container.querySelectorAll('.poster-card').forEach(card => {
@@ -718,7 +731,9 @@ function renderDownloads(torrents) {
         return;
     }
 
-    elements.downloadsList.innerHTML = torrents.map(torrent => `
+    elements.downloadsList.innerHTML = torrents.map(torrent => {
+        const v = torrent.visibility || 0;
+        return `
         <div class="download-item" data-infohash="${torrent.info_hash}">
             <div class="download-header">
                 <div class="download-name">${torrent.name}</div>
@@ -728,9 +743,13 @@ function renderDownloads(torrents) {
                     ` : torrent.status === 4 ? `
                         <button class="btn btn-sm resume-btn" data-infohash="${torrent.info_hash}">继续</button>
                     ` : ''}
-                    <button class="btn btn-sm ${torrent.is_public ? 'btn-success' : ''}"
-                            onclick="togglePublic('${torrent.info_hash}', ${!torrent.is_public})">
-                        ${torrent.is_public ? '✓ 公开' : '设为公开'}
+                    <button class="btn btn-sm ${v === 1 ? 'btn-info' : ''}"
+                            onclick="setVisibility('${torrent.info_hash}', ${v === 1 ? 0 : 1})">
+                        ${v === 1 ? '✓ 内部公开' : '内部公开'}
+                    </button>
+                    <button class="btn btn-sm ${v === 2 ? 'btn-success' : ''}"
+                            onclick="setVisibility('${torrent.info_hash}', ${v === 2 ? 0 : 2})">
+                        ${v === 2 ? '✓ 公开' : '公开'}
                     </button>
                     <button class="btn btn-sm remove-btn" data-infohash="${torrent.info_hash}">删除</button>
                 </div>
@@ -747,7 +766,7 @@ function renderDownloads(torrents) {
             </div>
             ${renderTranscodeStatus(torrent)}
         </div>
-    `).join('');
+    `}).join('');
 
     // 绑定按钮事件
     elements.downloadsList.querySelectorAll('.pause-btn').forEach(btn => {
@@ -822,16 +841,16 @@ async function removeTorrent(infoHash) {
     }
 }
 
-async function togglePublic(infoHash, isPublic) {
+async function setVisibility(infoHash, visibility) {
     try {
         await apiRequest(`${USER_API}/torrent/public`, {
             method: 'POST',
             body: JSON.stringify({
                 info_hash: infoHash,
-                is_public: isPublic
+                visibility: visibility
             })
         });
-        showToast(isPublic ? '已设为公开' : '已设为私有', 'success');
+        showToast(getVisibilityText(visibility) + '已设置', 'success');
         loadDownloads();
     } catch (error) {
         showToast(error.message || '设置失败', 'error');
@@ -928,10 +947,15 @@ async function openPlayer(infoHash, isOwner = false) {
 
         // 渲染分享按钮（仅对自己的资源显示）
         if (isOwner) {
+            const v = data.visibility || 0;
             elements.playerShare.innerHTML = `
-                <div class="share-toggle ${data.is_public ? 'public' : 'private'}" 
-                     onclick="togglePublicFromPlayer('${infoHash}', ${!data.is_public})">
-                    ${data.is_public ? '✓ 已公开分享' : '🔒 设为公开'}
+                <div class="share-toggle ${v === 1 ? 'internal' : ''}"
+                     onclick="setVisibilityFromPlayer('${infoHash}', ${v === 1 ? 0 : 1})">
+                    ${v === 1 ? '✓ 内部公开' : '内部公开'}
+                </div>
+                <div class="share-toggle ${v === 2 ? 'public' : 'private'}"
+                     onclick="setVisibilityFromPlayer('${infoHash}', ${v === 2 ? 0 : 2})">
+                    ${v === 2 ? '✓ 已公开分享' : '公开'}
                 </div>
             `;
         } else {
@@ -1184,13 +1208,17 @@ async function setPosterFromFile() {
     }
 }
 
-async function togglePublicFromPlayer(infoHash, isPublic) {
-    await togglePublic(infoHash, isPublic);
+async function setVisibilityFromPlayer(infoHash, visibility) {
+    await setVisibility(infoHash, visibility);
     // 刷新分享按钮状态
     elements.playerShare.innerHTML = `
-        <div class="share-toggle ${isPublic ? 'public' : 'private'}" 
-             onclick="togglePublicFromPlayer('${infoHash}', ${!isPublic})">
-            ${isPublic ? '✓ 已公开分享' : '🔒 设为公开'}
+        <div class="share-toggle ${visibility === 1 ? 'internal' : ''}"
+             onclick="setVisibilityFromPlayer('${infoHash}', ${visibility === 1 ? 0 : 1})">
+            ${visibility === 1 ? '✓ 内部公开' : '内部公开'}
+        </div>
+        <div class="share-toggle ${visibility === 2 ? 'public' : 'private'}"
+             onclick="setVisibilityFromPlayer('${infoHash}', ${visibility === 2 ? 0 : 2})">
+            ${visibility === 2 ? '✓ 已公开分享' : '公开'}
         </div>
     `;
 }
@@ -1876,8 +1904,8 @@ document.addEventListener('DOMContentLoaded', init);
 
 // 暴露全局函数供onclick使用
 window.navigateTo = navigateTo;
-window.togglePublic = togglePublic;
-window.togglePublicFromPlayer = togglePublicFromPlayer;
+window.setVisibility = setVisibility;
+window.setVisibilityFromPlayer = setVisibilityFromPlayer;
 window.selectSubtitle = selectSubtitle;
 
 // Admin functions

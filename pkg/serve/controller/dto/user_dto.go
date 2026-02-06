@@ -30,6 +30,6 @@ type ChangePasswordRequest struct {
 
 // SetTorrentPublicRequest request for setting torrent visibility
 type SetTorrentPublicRequest struct {
-	InfoHash string `json:"info_hash" validate:"required"` // Torrent info hash
-	IsPublic bool   `json:"is_public"`                     // Whether to make the torrent public
+	InfoHash   string `json:"info_hash" validate:"required"` // Torrent info hash
+	Visibility int    `json:"visibility"`                    // Visibility level: 0=private, 1=internal, 2=public
 }

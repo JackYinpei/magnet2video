@@ -193,7 +193,7 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 			Progress:     0,
 			Trackers:     torrentModel.StringSlice(req.Trackers),
 			CreatorID:    userID,
-			IsPublic:     false, // Default to private
+			Visibility:   torrentModel.VisibilityPrivate,
 		}
 
 		if err := ts.dbManager.DB().Create(newTorrent).Error; err != nil {
@@ -389,10 +389,21 @@ func (ts *TorrentServiceImpl) ListTorrents(c *gin.Context) (*vo.TorrentListRespo
 }
 
 // ListPublicTorrents 获取所有公开的 torrent 列表
+// 未登录：只返回 visibility=2 的种子
+// 已登录：返回 visibility IN (1, 2) 的种子
 // 使用 Redis 缓存数据库查询，实时统计数据始终是最新的
 func (ts *TorrentServiceImpl) ListPublicTorrents(c *gin.Context) (*vo.TorrentListResponse, error) {
 	ctx := c.Request.Context()
-	cacheKey := cache.PublicTorrentListKey()
+	userID := auth.GetUserID(c)
+	isLoggedIn := userID > 0
+
+	// Use different cache keys for logged-in vs anonymous
+	var cacheKey string
+	if isLoggedIn {
+		cacheKey = cache.PublicTorrentListKey() + ":internal"
+	} else {
+		cacheKey = cache.PublicTorrentListKey()
+	}
 
 	// 优先从缓存获取
 	var cachedTorrents []torrentModel.Torrent
@@ -404,9 +415,14 @@ func (ts *TorrentServiceImpl) ListPublicTorrents(c *gin.Context) (*vo.TorrentLis
 		}
 
 		// 缓存未命中或出错，从数据库加载
-		if err := ts.dbManager.DB().Where("deleted = ? AND is_public = ?", false, true).
-			Order("created_at DESC").
-			Find(&cachedTorrents).Error; err != nil {
+		query := ts.dbManager.DB().Where("deleted = ?", false)
+		if isLoggedIn {
+			query = query.Where("visibility IN ?", []int{torrentModel.VisibilityInternal, torrentModel.VisibilityPublic})
+		} else {
+			query = query.Where("visibility = ?", torrentModel.VisibilityPublic)
+		}
+
+		if err := query.Order("created_at DESC").Find(&cachedTorrents).Error; err != nil {
 			ts.loggerManager.Logger().Errorf("failed to list public torrents: %v", err)
 			return nil, err
 		}
@@ -442,7 +458,8 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 			Status:            t.Status,
 			PosterPath:        t.PosterPath,
 			CreatedAt:         t.CreatedAt,
-			IsPublic:          t.IsPublic,
+			IsPublic:          t.Visibility >= torrentModel.VisibilityPublic,
+			Visibility:        t.Visibility,
 			TranscodeStatus:   t.TranscodeStatus,
 			TranscodeProgress: t.TranscodeProgress,
 			TranscodedCount:   t.TranscodedCount,
@@ -551,6 +568,8 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 		Status:       t.Status,
 		Progress:     t.Progress,
 		CreatedAt:    t.CreatedAt,
+		IsPublic:     t.Visibility >= torrentModel.VisibilityPublic,
+		Visibility:   t.Visibility,
 	}, nil
 }
 
@@ -810,8 +829,9 @@ func (ts *TorrentServiceImpl) invalidateTorrentListCache(userID int64) {
 			keysToDelete = append(keysToDelete, cache.TorrentListKey(userID))
 		}
 
-		// 失效公共列表缓存（以防 torrent 变为公开或私有）
+		// 失效公共列表缓存（以防 torrent 可见性变更）
 		keysToDelete = append(keysToDelete, cache.PublicTorrentListKey())
+		keysToDelete = append(keysToDelete, cache.PublicTorrentListKey()+":internal")
 
 		if err := ts.cacheManager.Delete(ctx, keysToDelete...); err != nil {
 			ts.loggerManager.Logger().Warnf("Failed to invalidate cache: %v", err)

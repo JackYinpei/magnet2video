@@ -23,7 +23,8 @@ type AdminTorrentInfo struct {
 	TotalSize         int64   `json:"total_size"`          // Total size in bytes
 	Status            int     `json:"status"`              // Download status
 	Progress          float64 `json:"progress"`            // Download progress
-	IsPublic          bool    `json:"is_public"`           // Whether the torrent is public
+	IsPublic          bool    `json:"is_public"`           // Whether the torrent is public (deprecated, use visibility)
+	Visibility        int     `json:"visibility"`          // Visibility level: 0=private, 1=internal, 2=public
 	TranscodeStatus   int     `json:"transcode_status"`    // Transcode status
 	TranscodeProgress int     `json:"transcode_progress"`  // Transcode progress
 	CreatorID         int64   `json:"creator_id"`          // Creator user ID

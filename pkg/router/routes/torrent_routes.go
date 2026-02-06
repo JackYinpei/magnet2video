@@ -15,8 +15,8 @@ func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 	// Public routes (no auth required) - for browsing public resources
 	publicTorrent := v1.Group("/torrent")
 	{
-		// List all public torrents (anyone can browse)
-		publicTorrent.GET("/public", container.TorrentController.ListPublicTorrents)
+		// List public/internal torrents (uses optional auth to determine visibility)
+		publicTorrent.GET("/public", auth.OptionalJWTMiddleware(), container.TorrentController.ListPublicTorrents)
 
 		// Get torrent detail (public access for shared torrents)
 		publicTorrent.GET("/detail/:info_hash", container.TorrentController.GetTorrentDetail)

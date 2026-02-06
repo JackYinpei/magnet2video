@@ -42,7 +42,7 @@ type ChangePasswordResponse struct {
 
 // SetTorrentPublicResponse response for setting torrent visibility
 type SetTorrentPublicResponse struct {
-	InfoHash string `json:"info_hash"` // Torrent info hash
-	IsPublic bool   `json:"is_public"` // Whether the torrent is public
-	Message  string `json:"message"`   // Status message
+	InfoHash   string `json:"info_hash"`  // Torrent info hash
+	Visibility int    `json:"visibility"` // Visibility level: 0=private, 1=internal, 2=public
+	Message    string `json:"message"`    // Status message
 }

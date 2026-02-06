@@ -95,7 +95,7 @@ type Torrent struct {
 	Progress          float64      `gorm:"type:decimal(5,2);default:0" json:"progress"`             // Download progress percentage
 	Trackers          StringSlice  `gorm:"type:json" json:"trackers"`                               // Custom trackers
 	CreatorID         int64        `gorm:"type:bigint;default:0;index" json:"creator_id"`           // Creator user ID (0 if no user system)
-	IsPublic          bool         `gorm:"type:tinyint(1);default:0" json:"is_public"`              // Whether the torrent is publicly shared
+	Visibility        int          `gorm:"type:int;default:0" json:"visibility"`                    // Visibility level: 0=private, 1=internal, 2=public
 	TranscodeStatus   int          `gorm:"type:int;default:0" json:"transcode_status"`              // Overall transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
 	TranscodeProgress int          `gorm:"type:int;default:0" json:"transcode_progress"`            // Transcode progress percentage (0-100)
 	TranscodedCount   int          `gorm:"type:int;default:0" json:"transcoded_count"`              // Number of transcoded files
@@ -136,6 +136,13 @@ const (
 	StatusCompleted   = 2 // Download completed
 	StatusFailed      = 3 // Download failed
 	StatusPaused      = 4 // Download paused
+)
+
+// Visibility constants
+const (
+	VisibilityPrivate  = 0 // Only creator can see
+	VisibilityInternal = 1 // Logged-in users can see
+	VisibilityPublic   = 2 // Everyone can see
 )
 
 // TableName specifies table name

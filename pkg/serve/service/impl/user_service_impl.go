@@ -253,6 +253,10 @@ func (us *UserServiceImpl) SetTorrentPublic(c *gin.Context, req *dto.SetTorrentP
 		return nil, errors.New("unauthorized")
 	}
 
+	if req.Visibility < torrentModel.VisibilityPrivate || req.Visibility > torrentModel.VisibilityPublic {
+		return nil, errors.New("invalid visibility value")
+	}
+
 	var torrent torrentModel.Torrent
 	result := us.dbManager.DB().Where("info_hash = ? AND creator_id = ?", req.InfoHash, userID).First(&torrent)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -263,15 +267,15 @@ func (us *UserServiceImpl) SetTorrentPublic(c *gin.Context, req *dto.SetTorrentP
 		return nil, result.Error
 	}
 
-	torrent.IsPublic = req.IsPublic
+	torrent.Visibility = req.Visibility
 	if err := us.dbManager.DB().Save(&torrent).Error; err != nil {
 		us.loggerManager.Logger().Errorf("failed to update torrent visibility: %v", err)
 		return nil, err
 	}
 
 	return &vo.SetTorrentPublicResponse{
-		InfoHash: req.InfoHash,
-		IsPublic: req.IsPublic,
-		Message:  "Torrent visibility updated successfully",
+		InfoHash:   req.InfoHash,
+		Visibility: req.Visibility,
+		Message:    "Torrent visibility updated successfully",
 	}, nil
 }
