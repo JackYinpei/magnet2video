@@ -451,19 +451,22 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 	items := make([]vo.TorrentListItem, len(torrents))
 	for i, t := range torrents {
 		items[i] = vo.TorrentListItem{
-			InfoHash:          t.InfoHash,
-			Name:              t.Name,
-			TotalSize:         t.TotalSize,
-			Progress:          t.Progress,
-			Status:            t.Status,
-			PosterPath:        t.PosterPath,
-			CreatedAt:         t.CreatedAt,
-			IsPublic:          t.Visibility >= torrentModel.VisibilityPublic,
-			Visibility:        t.Visibility,
-			TranscodeStatus:   t.TranscodeStatus,
-			TranscodeProgress: t.TranscodeProgress,
-			TranscodedCount:   t.TranscodedCount,
-			TotalTranscode:    t.TotalTranscode,
+			InfoHash:           t.InfoHash,
+			Name:               t.Name,
+			TotalSize:          t.TotalSize,
+			Progress:           t.Progress,
+			Status:             t.Status,
+			PosterPath:         t.PosterPath,
+			CreatedAt:          t.CreatedAt,
+			IsPublic:           t.Visibility >= torrentModel.VisibilityPublic,
+			Visibility:         t.Visibility,
+			TranscodeStatus:    t.TranscodeStatus,
+			TranscodeProgress:  t.TranscodeProgress,
+			TranscodedCount:    t.TranscodedCount,
+			TotalTranscode:     t.TotalTranscode,
+			CloudUploadStatus:  t.CloudUploadStatus,
+			CloudUploadedCount: t.CloudUploadedCount,
+			TotalCloudUpload:   t.TotalCloudUpload,
 		}
 
 		// Mix in real-time stats if downloading or seeding

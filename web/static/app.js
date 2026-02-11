@@ -765,6 +765,7 @@ function renderDownloads(torrents) {
                 <div class="download-stat">状态: <span>${getStatusText(torrent.status)}</span></div>
             </div>
             ${renderTranscodeStatus(torrent)}
+            ${renderCloudUploadStatus(torrent)}
         </div>
     `}).join('');
 
@@ -916,6 +917,69 @@ function renderTranscodeStatus(torrent) {
             ${progressHtml}
         </div>
     `;
+}
+
+// ============ 云上传状态 ============
+
+function getCloudUploadText(status) {
+    const textMap = {
+        0: '',
+        1: '待上传',
+        2: '上传中',
+        3: '已上传',
+        4: '上传失败'
+    };
+    return textMap[status] || '';
+}
+
+function getCloudUploadClass(status) {
+    const classMap = {
+        0: 'none',
+        1: 'pending',
+        2: 'processing',
+        3: 'completed',
+        4: 'failed'
+    };
+    return classMap[status] || 'none';
+}
+
+function renderCloudUploadStatus(torrent) {
+    if (!torrent.cloud_upload_status || torrent.cloud_upload_status === 0) {
+        return '';
+    }
+
+    const statusText = getCloudUploadText(torrent.cloud_upload_status);
+    const statusClass = getCloudUploadClass(torrent.cloud_upload_status);
+    const uploaded = torrent.cloud_uploaded_count || 0;
+    const total = torrent.total_cloud_upload || 0;
+    const hasFailed = torrent.cloud_upload_status === 4;
+
+    return `
+        <div class="download-transcode">
+            <div class="download-transcode-label">
+                云上传: <span class="transcode-badge ${statusClass}">${statusText}</span>
+                ${total > 0 ? `(${uploaded}/${total} 文件)` : ''}
+                ${hasFailed ? `<button class="btn btn-sm btn-warning" style="margin-left:8px" onclick="retryCloudUpload('${torrent.info_hash}')">重新上传</button>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+async function retryCloudUpload(infoHash) {
+    if (!confirm('确定要重新上传失败的文件到云端吗？')) {
+        return;
+    }
+
+    try {
+        const data = await apiRequest(`${TORRENT_API}/cloud-upload/retry`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: infoHash })
+        });
+        showToast(data.message || '已重新排队上传', 'success');
+        loadDownloads();
+    } catch (error) {
+        showToast(error.message || '重新上传失败', 'error');
+    }
 }
 
 // ============ 播放器 ============
@@ -1913,3 +1977,4 @@ window.toggleUserRole = toggleUserRole;
 window.deleteUser = deleteUser;
 window.deleteAdminTorrent = deleteAdminTorrent;
 window.resetTranscode = resetTranscode;
+window.retryCloudUpload = retryCloudUpload;

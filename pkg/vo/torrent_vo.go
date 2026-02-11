@@ -96,6 +96,9 @@ type TorrentListItem struct {
 	TranscodeProgress     int     `json:"transcode_progress"`      // Transcode progress 0-100
 	TranscodedCount       int     `json:"transcoded_count"`        // Number of transcoded files
 	TotalTranscode        int     `json:"total_transcode"`         // Total files needing transcode
+	CloudUploadStatus     int     `json:"cloud_upload_status"`     // Cloud upload status: 0=none, 1=pending, 2=uploading, 3=completed, 4=failed
+	CloudUploadedCount    int     `json:"cloud_uploaded_count"`    // Number of uploaded files
+	TotalCloudUpload      int     `json:"total_cloud_upload"`      // Total files needing upload
 }
 
 // TorrentListResponse response for listing torrents
