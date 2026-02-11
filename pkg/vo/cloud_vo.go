@@ -29,3 +29,10 @@ type CloudUploadFileInfo struct {
 	CloudPath         string `json:"cloud_path"`
 	CloudUploadError  string `json:"cloud_upload_error"`
 }
+
+// RetryCloudUploadResponse response for retrying failed cloud uploads
+type RetryCloudUploadResponse struct {
+	InfoHash    string `json:"info_hash"`    // Info hash of the torrent
+	RetriedCount int   `json:"retried_count"` // Number of files re-queued for upload
+	Message     string `json:"message"`      // Status message
+}

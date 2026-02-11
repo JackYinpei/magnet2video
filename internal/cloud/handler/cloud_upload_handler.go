@@ -154,8 +154,8 @@ func (h *CloudUploadHandler) requeueForRetry(msg cloudTypes.CloudUploadMessage, 
 
 	// Wait before retry (exponential backoff: 5s, 10s, 20s)
 	backoff := time.Duration(5<<msg.RetryCount) * time.Second
-	h.loggerManager.Logger().Infof("Re-queuing cloud upload for retry %d/%d in %v: torrentID=%d, fileIndex=%d",
-		msg.RetryCount, cloudTypes.MaxRetryCount, backoff, msg.TorrentID, msg.FileIndex)
+	h.loggerManager.Logger().Infof("Re-queuing cloud upload for retry %d/%d in %v: torrentID=%d, fileIndex=%d, error=%v",
+		msg.RetryCount, cloudTypes.MaxRetryCount, backoff, msg.TorrentID, msg.FileIndex, uploadErr)
 
 	go func() {
 		time.Sleep(backoff)

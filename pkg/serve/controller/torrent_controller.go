@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,9 +20,11 @@ import (
 
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/cloud"
+	cloudTypes "github.com/Done-0/gin-scaffold/internal/cloud/types"
 	"github.com/Done-0/gin-scaffold/internal/db"
 	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
 	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
+	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/types/consts"
 	"github.com/Done-0/gin-scaffold/internal/types/errno"
 	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
@@ -39,6 +42,7 @@ type TorrentController struct {
 	torrentService      service.TorrentService
 	dbManager           db.DatabaseManager
 	cloudStorageManager cloud.CloudStorageManager
+	queueProducer       queue.Producer
 }
 
 // NewTorrentController creates torrent controller
@@ -47,12 +51,14 @@ func NewTorrentController(
 	torrentService service.TorrentService,
 	dbManager db.DatabaseManager,
 	cloudStorageManager cloud.CloudStorageManager,
+	queueProducer queue.Producer,
 ) *TorrentController {
 	return &TorrentController{
 		config:              config,
 		torrentService:      torrentService,
 		dbManager:           dbManager,
 		cloudStorageManager: cloudStorageManager,
+		queueProducer:       queueProducer,
 	}
 }
 
@@ -596,5 +602,127 @@ func (tc *TorrentController) GetCloudURL(c *gin.Context) {
 	c.JSON(http.StatusOK, vo.Success(c, pkgVo.CloudURLResponse{
 		URL:       signedURL,
 		ExpiresAt: expiresAt,
+	}))
+}
+
+// RetryCloudUpload handles retrying failed cloud uploads for a torrent
+// @Router /api/v1/torrent/cloud-upload/retry [post]
+func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
+	if !tc.cloudStorageManager.IsEnabled() {
+		c.JSON(http.StatusServiceUnavailable, vo.Fail(c, nil, errorx.New(errno.ErrCloudStorageDisabled)))
+		return
+	}
+
+	req := &dto.RetryCloudUploadRequest{}
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "bind JSON failed"))))
+		return
+	}
+
+	userID := auth.GetUserID(c)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, vo.Fail(c, nil, errorx.New(errno.ErrUnauthorized)))
+		return
+	}
+
+	// Find torrent and verify ownership
+	var torrentRecord torrentModel.Torrent
+	if err := tc.dbManager.DB().
+		Where("info_hash = ? AND creator_id = ? AND deleted = ?", req.InfoHash, userID, false).
+		First(&torrentRecord).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, vo.Fail(c, nil, errorx.New(errno.ErrTorrentNotFound, errorx.KV("info_hash", req.InfoHash))))
+			return
+		}
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer)))
+		return
+	}
+
+	// Collect failed files and re-queue
+	pathPrefix := tc.config.CloudStorageConfig.PathPrefix
+	if pathPrefix == "" {
+		pathPrefix = "torrents"
+	}
+
+	var retriedCount int
+	for i, file := range torrentRecord.Files {
+		if file.CloudUploadStatus != torrentModel.CloudUploadStatusFailed {
+			continue
+		}
+
+		// Determine local path
+		localPath := file.Path
+		if file.Source == "original" || file.Source == "" {
+			localPath = filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name, filepath.Base(file.Path))
+			if _, err := os.Stat(localPath); os.IsNotExist(err) {
+				localPath = filepath.Join(torrentRecord.DownloadPath, file.Path)
+			}
+		}
+
+		// Build cloud path
+		fileName := filepath.Base(localPath)
+		cloudPath := fmt.Sprintf("%s/%s/%s", pathPrefix, torrentRecord.InfoHash, fileName)
+
+		// Determine content type
+		contentType := getContentType(localPath)
+		if contentType == "application/octet-stream" {
+			contentType = ""
+		}
+
+		// Get file size
+		var fileSize int64
+		if info, err := os.Stat(localPath); err == nil {
+			fileSize = info.Size()
+		} else {
+			fileSize = file.Size
+		}
+
+		// Build and send message
+		msg := cloudTypes.CloudUploadMessage{
+			TorrentID:     torrentRecord.ID,
+			InfoHash:      torrentRecord.InfoHash,
+			FileIndex:     i,
+			SubtitleIndex: -1,
+			LocalPath:     localPath,
+			CloudPath:     cloudPath,
+			ContentType:   contentType,
+			FileSize:      fileSize,
+			IsTranscoded:  file.Source == "transcoded",
+			CreatorID:     torrentRecord.CreatorID,
+			RetryCount:    0,
+		}
+
+		msgBytes, err := json.Marshal(msg)
+		if err != nil {
+			continue
+		}
+
+		if err := tc.queueProducer.Send(context.Background(), cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
+			continue
+		}
+
+		// Reset file status to pending
+		torrentRecord.Files[i].CloudUploadStatus = torrentModel.CloudUploadStatusPending
+		torrentRecord.Files[i].CloudUploadError = ""
+		retriedCount++
+	}
+
+	if retriedCount == 0 {
+		c.JSON(http.StatusOK, vo.Success(c, pkgVo.RetryCloudUploadResponse{
+			InfoHash:     req.InfoHash,
+			RetriedCount: 0,
+			Message:      "No failed cloud uploads to retry",
+		}))
+		return
+	}
+
+	// Update torrent cloud status
+	torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusPending
+	tc.dbManager.DB().Save(&torrentRecord)
+
+	c.JSON(http.StatusOK, vo.Success(c, pkgVo.RetryCloudUploadResponse{
+		InfoHash:     req.InfoHash,
+		RetriedCount: retriedCount,
+		Message:      fmt.Sprintf("Re-queued %d file(s) for cloud upload", retriedCount),
 	}))
 }

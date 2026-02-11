@@ -8,3 +8,8 @@ type GetCloudURLRequest struct {
 	InfoHash  string `json:"info_hash" validate:"required"` // Info hash of the torrent
 	FileIndex int    `json:"file_index" validate:"gte=0"`   // Index of the file within the torrent
 }
+
+// RetryCloudUploadRequest request for retrying failed cloud uploads
+type RetryCloudUploadRequest struct {
+	InfoHash string `json:"info_hash" validate:"required"` // Info hash of the torrent
+}

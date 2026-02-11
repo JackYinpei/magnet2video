@@ -55,7 +55,7 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	testService := impl.NewTestService(loggerManager, redisManager, v)
 	testController := controller.NewTestController(testService, sseManager)
 	torrentServiceImpl := impl.NewTorrentService(loggerManager, databaseManager, torrentManager, cacheManager)
-	torrentController := controller.NewTorrentController(config, torrentServiceImpl, databaseManager, v2)
+	torrentController := controller.NewTorrentController(config, torrentServiceImpl, databaseManager, v2, producer)
 	userService := impl.NewUserService(loggerManager, databaseManager)
 	userController := controller.NewUserController(userService)
 	adminService := impl.NewAdminService(loggerManager, databaseManager, torrentManager)
