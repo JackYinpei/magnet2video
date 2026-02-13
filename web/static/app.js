@@ -944,15 +944,17 @@ function getCloudUploadClass(status) {
 }
 
 function renderCloudUploadStatus(torrent) {
-    if (!torrent.cloud_upload_status || torrent.cloud_upload_status === 0) {
+    const uploaded = torrent.cloud_uploaded_count || 0;
+    const total = torrent.total_cloud_upload || 0;
+
+    // No cloud upload tasks for this torrent.
+    if (total <= 0 && uploaded <= 0) {
         return '';
     }
 
     const statusText = getCloudUploadText(torrent.cloud_upload_status);
     const statusClass = getCloudUploadClass(torrent.cloud_upload_status);
-    const uploaded = torrent.cloud_uploaded_count || 0;
-    const total = torrent.total_cloud_upload || 0;
-    const hasFailed = torrent.cloud_upload_status === 4;
+    const hasFailed = torrent.cloud_upload_status === 4 && (torrent.total_cloud_upload || 0) > 0;
 
     return `
         <div class="download-transcode">

@@ -172,7 +172,12 @@ func (h *CloudUploadHandler) handleUploadFailure(msg cloudTypes.CloudUploadMessa
 	h.loggerManager.Logger().Errorf("Cloud upload failed: torrentID=%d, fileIndex=%d, subtitleIndex=%d, error=%s",
 		msg.TorrentID, msg.FileIndex, msg.SubtitleIndex, errMsg)
 
-	h.updateTorrentFileCloudStatus(msg.TorrentID, msg.FileIndex, torrentModel.CloudUploadStatusFailed, errMsg)
+	if err := h.updateTorrentFileCloudStatus(msg.TorrentID, msg.FileIndex, torrentModel.CloudUploadStatusFailed, errMsg); err != nil {
+		h.loggerManager.Logger().Errorf("failed to mark cloud upload as failed: %v", err)
+	}
+	if err := h.checkAndUpdateTorrentCloudStatus(msg.TorrentID); err != nil {
+		h.loggerManager.Logger().Errorf("failed to update torrent cloud status after failure: %v", err)
+	}
 }
 
 // updateTorrentFileCloudStatus updates the cloud upload status of a torrent file

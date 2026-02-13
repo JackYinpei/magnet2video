@@ -204,11 +204,20 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 		// Update existing record - may be a soft-deleted record being re-added
 		// Update the record: reset deleted flag, update status, files and user
 		updates := map[string]any{
-			"status":     torrentModel.StatusDownloading,
-			"deleted":    false,
-			"name":       torrentInfo.Name,
-			"total_size": torrentInfo.TotalSize,
-			"files":      files,
+			"status":                torrentModel.StatusDownloading,
+			"progress":              0,
+			"deleted":               false,
+			"name":                  torrentInfo.Name,
+			"total_size":            torrentInfo.TotalSize,
+			"files":                 files,
+			"transcode_status":      torrentModel.TranscodeStatusNone,
+			"transcode_progress":    0,
+			"transcoded_count":      0,
+			"total_transcode":       0,
+			"cloud_upload_status":   torrentModel.CloudUploadStatusNone,
+			"cloud_upload_progress": 0,
+			"cloud_uploaded_count":  0,
+			"total_cloud_upload":    0,
 		}
 
 		// Update creator_id only if it was 0 or if this user is adding it

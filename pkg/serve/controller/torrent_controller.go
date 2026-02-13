@@ -646,18 +646,12 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 
 	var retriedCount int
 	for i, file := range torrentRecord.Files {
-		if file.CloudUploadStatus != torrentModel.CloudUploadStatusFailed {
+		if !shouldRetryCloudUploadFile(file) {
 			continue
 		}
 
-		// Determine local path
-		localPath := file.Path
-		if file.Source == "original" || file.Source == "" {
-			localPath = filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name, filepath.Base(file.Path))
-			if _, err := os.Stat(localPath); os.IsNotExist(err) {
-				localPath = filepath.Join(torrentRecord.DownloadPath, file.Path)
-			}
-		}
+		// Determine local path (handles both absolute and relative persisted paths)
+		localPath := resolveRetryLocalPath(torrentRecord, file)
 
 		// Build cloud path
 		fileName := filepath.Base(localPath)
@@ -708,6 +702,10 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 	}
 
 	if retriedCount == 0 {
+		// Reconcile stale aggregate fields so UI won't keep showing a phantom failed state.
+		recalculateTorrentCloudSummary(&torrentRecord)
+		tc.dbManager.DB().Save(&torrentRecord)
+
 		c.JSON(http.StatusOK, vo.Success(c, pkgVo.RetryCloudUploadResponse{
 			InfoHash:     req.InfoHash,
 			RetriedCount: 0,
@@ -717,6 +715,7 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 	}
 
 	// Update torrent cloud status
+	recalculateTorrentCloudSummary(&torrentRecord)
 	torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusPending
 	tc.dbManager.DB().Save(&torrentRecord)
 
@@ -725,4 +724,130 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 		RetriedCount: retriedCount,
 		Message:      fmt.Sprintf("Re-queued %d file(s) for cloud upload", retriedCount),
 	}))
+}
+
+func shouldRetryCloudUploadFile(file torrentModel.TorrentFile) bool {
+	// Never retry completed files.
+	if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted {
+		return false
+	}
+
+	// First-class retry states.
+	if file.CloudUploadStatus == torrentModel.CloudUploadStatusFailed ||
+		file.CloudUploadStatus == torrentModel.CloudUploadStatusPending ||
+		file.CloudUploadStatus == torrentModel.CloudUploadStatusUploading {
+		return true
+	}
+
+	// Fallback for stale status records: allow manual retry of likely cloud candidates
+	// when status is NONE but object is not marked completed.
+	if file.CloudUploadStatus != torrentModel.CloudUploadStatusNone || file.CloudPath != "" {
+		return false
+	}
+
+	fileType := file.Type
+	if fileType == "" {
+		fileType = torrentModel.DetectFileType(file.Path)
+	}
+
+	switch file.Source {
+	case "transcoded", "extracted":
+		return true
+	case "original", "":
+		return file.IsSelected &&
+			file.TranscodeStatus == torrentModel.TranscodeStatusNone &&
+			(fileType == "video" || fileType == "subtitle")
+	default:
+		return false
+	}
+}
+
+func resolveRetryLocalPath(torrentRecord torrentModel.Torrent, file torrentModel.TorrentFile) string {
+	candidates := make([]string, 0, 4)
+
+	if file.Source == "original" || file.Source == "" {
+		candidates = append(candidates,
+			filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name, filepath.Base(file.Path)),
+			filepath.Join(torrentRecord.DownloadPath, file.Path),
+			file.Path,
+		)
+	} else {
+		candidates = append(candidates, file.Path)
+		if !filepath.IsAbs(file.Path) {
+			candidates = append(candidates,
+				filepath.Join(torrentRecord.DownloadPath, file.Path),
+				filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name, filepath.Base(file.Path)),
+			)
+		}
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	for _, p := range candidates {
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+
+	for _, p := range candidates {
+		if p != "" {
+			return p
+		}
+	}
+	return file.Path
+}
+
+func recalculateTorrentCloudSummary(torrentRecord *torrentModel.Torrent) {
+	if torrentRecord == nil {
+		return
+	}
+
+	var pending, uploading, completed, failed int
+	var total, uploaded int
+	for _, file := range torrentRecord.Files {
+		if file.CloudUploadStatus != torrentModel.CloudUploadStatusNone {
+			total++
+		}
+		if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted {
+			uploaded++
+		}
+		switch file.CloudUploadStatus {
+		case torrentModel.CloudUploadStatusPending:
+			pending++
+		case torrentModel.CloudUploadStatusUploading:
+			uploading++
+		case torrentModel.CloudUploadStatusCompleted:
+			completed++
+		case torrentModel.CloudUploadStatusFailed:
+			failed++
+		}
+	}
+
+	torrentRecord.TotalCloudUpload = total
+	torrentRecord.CloudUploadedCount = uploaded
+	if total > 0 {
+		torrentRecord.CloudUploadProgress = int(float64(uploaded) * 100 / float64(total))
+	} else {
+		torrentRecord.CloudUploadProgress = 0
+	}
+
+	switch {
+	case uploading > 0:
+		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusUploading
+	case pending > 0:
+		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusPending
+	case failed > 0 && completed == 0:
+		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusFailed
+	case completed > 0:
+		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusCompleted
+		torrentRecord.CloudUploadProgress = 100
+	default:
+		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusNone
+	}
 }
