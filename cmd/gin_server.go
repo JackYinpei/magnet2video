@@ -103,37 +103,29 @@ func Start() {
 
 	// Start cloud upload consumer (if cloud storage is enabled)
 	var cloudUploadConsumer queue.Consumer
+	var cloudStorageManager cloud.CloudStorageManager
 	if cfgs.CloudStorageConfig.Enabled {
-		go func() {
-			cloudStorageManager := cloud.New(cfgs, container.LoggerManager)
-			defer func() {
-				if cloudStorageManager != nil {
-					cloudStorageManager.Close()
-				}
-			}()
+		cloudStorageManager = cloud.New(cfgs, container.LoggerManager)
 
-			cloudUploadHandler := cloudHandler.NewCloudUploadHandler(
-				cfgs,
-				container.LoggerManager,
-				container.DatabaseManager,
-				cloudStorageManager,
-				container.QueueProducer,
-			)
+		cloudUploadHandler := cloudHandler.NewCloudUploadHandler(
+			cfgs,
+			container.LoggerManager,
+			container.DatabaseManager,
+			cloudStorageManager,
+			container.QueueProducer,
+		)
 
-			var err error
-			cloudUploadConsumer, err = queue.NewConsumer(cfgs, cloudUploadHandler)
-			if err != nil {
-				log.Printf("Warning: Failed to create cloud upload consumer: %v", err)
-				return
-			}
-
+		var err error
+		cloudUploadConsumer, err = queue.NewConsumer(cfgs, cloudUploadHandler)
+		if err != nil {
+			log.Printf("Warning: Failed to create cloud upload consumer: %v", err)
+		} else {
 			if err := cloudUploadConsumer.Subscribe([]string{cloudTypes.TopicCloudUploadJobs}); err != nil {
 				log.Printf("Warning: Failed to subscribe to cloud upload topic: %v", err)
-				return
+			} else {
+				log.Println("Cloud upload consumer started")
 			}
-
-			log.Println("Cloud upload consumer started")
-		}()
+		}
 	}
 
 	// Set Gin mode based on environment
@@ -186,6 +178,11 @@ func Start() {
 	if cloudUploadConsumer != nil {
 		cloudUploadConsumer.Close()
 		log.Println("Cloud upload consumer closed")
+	}
+
+	// Close cloud storage manager
+	if cloudStorageManager != nil {
+		cloudStorageManager.Close()
 	}
 
 	// Graceful shutdown with timeout
