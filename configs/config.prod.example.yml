@@ -141,8 +141,15 @@ TORRENT:
 # ===========================================
 CLOUD_STORAGE:
   ENABLED: false                                    # 是否启用云存储上传（生产环境建议启用）
-  PROVIDER: "gcs"                                   # 云存储提供商: gcs
+  PROVIDER: "gcs"                                   # 云存储提供商: gcs 或 s3
   CREDENTIALS_FILE: "/secrets/gcs-sa.json"         # GCS Service Account JSON 文件路径
   BUCKET_NAME: "your-bucket-name"                  # GCS Bucket 名称（通过环境变量覆盖）
   SIGNED_URL_EXPIRE_HOURS: 3                       # Signed URL 过期时间（小时）
   PATH_PREFIX: "torrents"                          # 对象存储路径前缀
+  # S3 专用
+  REGION: "us-east-1"                              # AWS 区域
+  ACCESS_KEY_ID: "your-access-key"
+  SECRET_ACCESS_KEY: "your-secret-key"
+  ENDPOINT: "https://s3.example.com"               # S3/Ceph 自定义端点
+  ADDRESSING_STYLE: "path"                         # path 或 virtual
+  SIGNATURE_VERSION: "v4"                          # v4 或 s3(v2)

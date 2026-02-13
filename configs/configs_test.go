@@ -52,7 +52,7 @@ func TestCompareStructs_WithChanges(t *testing.T) {
 
 func TestCompareStructs_TypeMismatch(t *testing.T) {
 	oldObj := testOuter{Inner: testInner{Name: "Alice", Age: 10}, Count: 1}
-	newObj := struct{
+	newObj := struct {
 		Inner testInner
 		Count int
 		Flag  bool
@@ -108,6 +108,8 @@ func TestOverrideFromEnv(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY_ID", "ak")
 	t.Setenv("S3_SECRET_ACCESS_KEY", "sk")
 	t.Setenv("S3_ENDPOINT", "https://s3.example.com")
+	t.Setenv("S3_ADDRESSING_STYLE", "path")
+	t.Setenv("S3_SIGNATURE_VERSION", "s3")
 	t.Setenv("S3_BUCKET_NAME", "s3-bucket")
 
 	config := &Config{}
@@ -145,6 +147,12 @@ func TestOverrideFromEnv(t *testing.T) {
 	}
 	if config.CloudStorageConfig.Endpoint != "https://s3.example.com" {
 		t.Fatalf("Cloud storage endpoint override failed: %q", config.CloudStorageConfig.Endpoint)
+	}
+	if config.CloudStorageConfig.AddressingStyle != "path" {
+		t.Fatalf("Cloud storage addressing style override failed: %q", config.CloudStorageConfig.AddressingStyle)
+	}
+	if config.CloudStorageConfig.SignatureVersion != "s3" {
+		t.Fatalf("Cloud storage signature version override failed: %q", config.CloudStorageConfig.SignatureVersion)
 	}
 }
 

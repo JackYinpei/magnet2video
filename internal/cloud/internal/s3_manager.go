@@ -7,6 +7,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -29,6 +33,9 @@ type s3Manager struct {
 	client        *s3.Client
 	uploader      *manager.Uploader
 	presignClient *s3.PresignClient
+	credentials   aws.CredentialsProvider
+	usePathStyle  bool
+	useSigV2      bool
 }
 
 // NewS3Manager creates a new S3 CloudStorageManager instance
@@ -73,20 +80,32 @@ func (m *s3Manager) initialize() error {
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	m.credentials = awsCfg.Credentials
+
+	addressingStyle := strings.ToLower(strings.TrimSpace(m.cfg.CloudStorageConfig.AddressingStyle))
+	signatureVersion := strings.ToLower(strings.TrimSpace(m.cfg.CloudStorageConfig.SignatureVersion))
+	m.useSigV2 = isSigV2SignatureVersion(signatureVersion)
+	m.usePathStyle = resolveS3PathStyle(addressingStyle, m.cfg.CloudStorageConfig.Endpoint != "", m.useSigV2)
 
 	// Create S3 client options
-	s3Opts := []func(*s3.Options){}
-
-	// Configure custom endpoint for S3-compatible storage (MinIO, etc.)
-	if m.cfg.CloudStorageConfig.Endpoint != "" {
-		s3Opts = append(s3Opts, func(o *s3.Options) {
-			o.BaseEndpoint = aws.String(m.cfg.CloudStorageConfig.Endpoint)
-			o.UsePathStyle = true // Required for most S3-compatible storage
-		})
+	s3Opts := []func(*s3.Options){
+		func(o *s3.Options) {
+			if m.cfg.CloudStorageConfig.Endpoint != "" {
+				o.BaseEndpoint = aws.String(m.cfg.CloudStorageConfig.Endpoint)
+			}
+			o.UsePathStyle = m.usePathStyle
+			if m.useSigV2 {
+				o.HTTPSignerV4 = &sigV2Signer{}
+			}
+		},
 	}
 
 	m.client = s3.NewFromConfig(awsCfg, s3Opts...)
-	m.presignClient = s3.NewPresignClient(m.client)
+	if m.useSigV2 {
+		m.presignClient = nil
+	} else {
+		m.presignClient = s3.NewPresignClient(m.client)
+	}
 
 	// Create uploader with multipart support for large files
 	m.uploader = manager.NewUploader(m.client, func(u *manager.Uploader) {
@@ -102,10 +121,21 @@ func (m *s3Manager) initialize() error {
 		m.client = nil
 		m.presignClient = nil
 		m.uploader = nil
+		m.credentials = nil
 		return fmt.Errorf("failed to access bucket %s: %w", m.cfg.CloudStorageConfig.BucketName, err)
 	}
 
-	m.loggerManager.Logger().Infof("S3 storage initialized: bucket=%s", m.cfg.CloudStorageConfig.BucketName)
+	signatureLabel := "v4"
+	if m.useSigV2 {
+		signatureLabel = "v2"
+	}
+	addressingLabel := "virtual"
+	if m.usePathStyle {
+		addressingLabel = "path"
+	}
+
+	m.loggerManager.Logger().Infof("S3 storage initialized: bucket=%s, addressingStyle=%s, signature=%s",
+		m.cfg.CloudStorageConfig.BucketName, addressingLabel, signatureLabel)
 	return nil
 }
 
@@ -223,6 +253,13 @@ func (m *s3Manager) GenerateSignedURL(ctx context.Context, objectPath string, ex
 		return "", fmt.Errorf("S3 storage is not enabled")
 	}
 
+	if m.useSigV2 {
+		return m.generateSignedURLV2(ctx, objectPath, expiration)
+	}
+	if m.presignClient == nil {
+		return "", fmt.Errorf("S3 presign client is not initialized")
+	}
+
 	presignResult, err := m.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(m.cfg.CloudStorageConfig.BucketName),
 		Key:    aws.String(objectPath),
@@ -232,6 +269,96 @@ func (m *s3Manager) GenerateSignedURL(ctx context.Context, objectPath string, ex
 	}
 
 	return presignResult.URL, nil
+}
+
+// generateSignedURLV2 generates an S3 Signature V2 signed URL.
+func (m *s3Manager) generateSignedURLV2(ctx context.Context, objectPath string, expiration time.Duration) (string, error) {
+	if m.credentials == nil {
+		return "", fmt.Errorf("S3 credentials provider is not initialized")
+	}
+
+	creds, err := m.credentials.Retrieve(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve S3 credentials for signed URL: %w", err)
+	}
+	if creds.AccessKeyID == "" || creds.SecretAccessKey == "" {
+		return "", fmt.Errorf("S3 credentials are missing access key or secret key")
+	}
+
+	endpointURL, err := parseS3EndpointURL(m.cfg.CloudStorageConfig.Endpoint)
+	if err != nil {
+		return "", err
+	}
+
+	key := strings.TrimLeft(objectPath, "/")
+	if key == "" {
+		return "", fmt.Errorf("object path cannot be empty")
+	}
+	escapedKey := escapeS3ObjectKey(key)
+
+	if m.usePathStyle {
+		endpointURL.Path = joinURLPath(endpointURL.Path, m.cfg.CloudStorageConfig.BucketName, escapedKey)
+	} else {
+		endpointURL.Host = fmt.Sprintf("%s.%s", m.cfg.CloudStorageConfig.BucketName, endpointURL.Host)
+		endpointURL.Path = joinURLPath(endpointURL.Path, escapedKey)
+	}
+
+	expires := strconv.FormatInt(time.Now().UTC().Add(expiration).Unix(), 10)
+	query := endpointURL.Query()
+	query.Set("AWSAccessKeyId", creds.AccessKeyID)
+	query.Set("Expires", expires)
+	if creds.SessionToken != "" {
+		query.Set("x-amz-security-token", creds.SessionToken)
+	}
+	query.Del("Signature")
+	endpointURL.RawQuery = query.Encode()
+
+	req := &http.Request{
+		Method: http.MethodGet,
+		URL:    endpointURL,
+		Header: http.Header{},
+	}
+	signature := sigV2Signature(creds.SecretAccessKey, buildSigV2StringToSign(req, expires))
+	query.Set("Signature", signature)
+	endpointURL.RawQuery = query.Encode()
+
+	return endpointURL.String(), nil
+}
+
+func parseS3EndpointURL(rawEndpoint string) (*url.URL, error) {
+	endpoint := strings.TrimSpace(rawEndpoint)
+	if endpoint == "" {
+		return nil, fmt.Errorf("S3 endpoint is required when using signature v2 signed URL")
+	}
+	if !strings.Contains(endpoint, "://") {
+		endpoint = "https://" + endpoint
+	}
+
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("invalid S3 endpoint %q: %w", rawEndpoint, err)
+	}
+	if parsed.Host == "" {
+		return nil, fmt.Errorf("invalid S3 endpoint %q: missing host", rawEndpoint)
+	}
+
+	return parsed, nil
+}
+
+func resolveS3PathStyle(addressingStyle string, hasCustomEndpoint bool, forcePathStyle bool) bool {
+	if forcePathStyle {
+		return true
+	}
+
+	switch addressingStyle {
+	case "path", "path-style", "url":
+		return true
+	case "virtual", "virtual-hosted", "host":
+		return false
+	default:
+		// S3-compatible endpoints and SigV2 deployments typically need path-style.
+		return hasCustomEndpoint || forcePathStyle
+	}
 }
 
 // Delete deletes an object from S3
