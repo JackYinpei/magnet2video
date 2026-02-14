@@ -182,84 +182,102 @@ func (h *CloudUploadHandler) handleUploadFailure(msg cloudTypes.CloudUploadMessa
 
 // updateTorrentFileCloudStatus updates the cloud upload status of a torrent file
 func (h *CloudUploadHandler) updateTorrentFileCloudStatus(torrentID int64, fileIndex int, status int, errMsg string) error {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
-		return err
+	updates := map[string]interface{}{
+		"cloud_upload_status": status,
+	}
+	if errMsg != "" {
+		updates["cloud_upload_error"] = errMsg
 	}
 
-	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
-		torrentRecord.Files[fileIndex].CloudUploadStatus = status
-		if errMsg != "" {
-			torrentRecord.Files[fileIndex].CloudUploadError = errMsg
-		}
-	}
-
-	return h.dbManager.DB().Save(&torrentRecord).Error
+	return h.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Updates(updates).Error
 }
 
-// updateTorrentFileCloudCompleted marks a torrent file's cloud upload as completed
 func (h *CloudUploadHandler) updateTorrentFileCloudCompleted(torrentID int64, fileIndex int, cloudPath string) error {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
-		return err
+	// First get current status to see if we need to increment uploaded count? 
+	// Actually checkAndUpdateTorrentCloudStatus recalculates everything, so we don't need to maintain incremental count here manually 
+	// if we just call that function afterwards. 
+	// The original code did: torrentRecord.CloudUploadedCount++ if prevStatus != Completed.
+	// But checkAndUpdateTorrentCloudStatus re-sums it anyway.
+	
+	updates := map[string]interface{}{
+		"cloud_upload_status": torrentModel.CloudUploadStatusCompleted,
+		"cloud_path":          cloudPath,
+		"cloud_upload_error":  "",
 	}
 
-	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
-		prevStatus := torrentRecord.Files[fileIndex].CloudUploadStatus
-		torrentRecord.Files[fileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusCompleted
-		torrentRecord.Files[fileIndex].CloudPath = cloudPath
-		torrentRecord.Files[fileIndex].CloudUploadError = ""
-		if prevStatus != torrentModel.CloudUploadStatusCompleted {
-			torrentRecord.CloudUploadedCount++
-		}
-	}
-
-	return h.dbManager.DB().Save(&torrentRecord).Error
+	return h.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Updates(updates).Error
 }
 
-// checkAndUpdateTorrentCloudStatus checks and updates overall torrent cloud upload status
 func (h *CloudUploadHandler) checkAndUpdateTorrentCloudStatus(torrentID int64) error {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
+	type Result struct {
+		Status int
+		Count  int
+	}
+	var results []Result
+	// Count files by status
+	if err := h.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Select("cloud_upload_status as status, count(*) as count").
+		Where("torrent_id = ?", torrentID).
+		Group("cloud_upload_status").
+		Scan(&results).Error; err != nil {
 		return err
 	}
 
 	var pending, uploading, completed, failed int
 	var total, uploaded int
-	for _, file := range torrentRecord.Files {
-		if file.CloudUploadStatus != torrentModel.CloudUploadStatusNone {
-			total++
+
+	for _, r := range results {
+		count := r.Count
+		status := r.Status
+		
+		if status != torrentModel.CloudUploadStatusNone {
+			total += count
 		}
-		if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted {
-			uploaded++
-		}
-		switch file.CloudUploadStatus {
-		case torrentModel.CloudUploadStatusPending:
-			pending++
-		case torrentModel.CloudUploadStatusUploading:
-			uploading++
-		case torrentModel.CloudUploadStatusCompleted:
-			completed++
-		case torrentModel.CloudUploadStatusFailed:
-			failed++
+		if status == torrentModel.CloudUploadStatusCompleted {
+			uploaded += count
+			completed += count
+		} else if status == torrentModel.CloudUploadStatusPending {
+			pending += count
+		} else if status == torrentModel.CloudUploadStatusUploading {
+			uploading += count
+		} else if status == torrentModel.CloudUploadStatusFailed {
+			failed += count
 		}
 	}
 
-	// Keep counters consistent with current file states
-	torrentRecord.TotalCloudUpload = total
-	torrentRecord.CloudUploadedCount = uploaded
+	updates := map[string]interface{}{
+		"total_cloud_upload":   total,
+		"cloud_uploaded_count": uploaded,
+		"cloud_upload_progress": 0,
+		"cloud_upload_status":   torrentModel.CloudUploadStatusNone,
+	}
 
-	// Determine overall status
+	if total > 0 {
+		updates["cloud_upload_progress"] = int(float64(uploaded) * 100 / float64(total))
+	}
+
 	if uploading > 0 {
-		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusUploading
+		updates["cloud_upload_status"] = torrentModel.CloudUploadStatusUploading
 	} else if pending > 0 {
-		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusPending
+		updates["cloud_upload_status"] = torrentModel.CloudUploadStatusPending
 	} else if failed > 0 && completed == 0 {
-		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusFailed
+		updates["cloud_upload_status"] = torrentModel.CloudUploadStatusFailed
 	} else if completed > 0 || (completed == 0 && pending == 0 && uploading == 0 && failed == 0) {
-		torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusCompleted
-		torrentRecord.CloudUploadProgress = 100
+		// If we have some completed, or if everything is done (which here means empty or all None? No, total>0 logic covers)
+		// Actually if total > 0 and we are here, it means we have mixed states but no active uploading/pending.
+		// If failed > 0, it's partial failure? 
+		// Original logic: "else if failed > 0 && completed == 0" -> Failed.
+		// "else if completed > 0 || ..." -> Completed.
+		// So if we have some failed and some completed -> Completed (or partial).
+		// Let's stick to original logic:
+		updates["cloud_upload_status"] = torrentModel.CloudUploadStatusCompleted
 	}
+	
+	// If total is 0, status remains None (default)
 
-	return h.dbManager.DB().Save(&torrentRecord).Error
+	return h.dbManager.DB().Model(&torrentModel.Torrent{}).Where("id = ?", torrentID).Updates(updates).Error
 }

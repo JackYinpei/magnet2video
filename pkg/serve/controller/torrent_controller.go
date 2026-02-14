@@ -628,6 +628,9 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 	// Find torrent and verify ownership
 	var torrentRecord torrentModel.Torrent
 	if err := tc.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("`index` asc")
+		}).
 		Where("info_hash = ? AND creator_id = ? AND deleted = ?", req.InfoHash, userID, false).
 		First(&torrentRecord).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -675,7 +678,7 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 		msg := cloudTypes.CloudUploadMessage{
 			TorrentID:     torrentRecord.ID,
 			InfoHash:      torrentRecord.InfoHash,
-			FileIndex:     i,
+			FileIndex:     file.Index,
 			SubtitleIndex: -1,
 			LocalPath:     localPath,
 			CloudPath:     cloudPath,
@@ -695,7 +698,15 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 			continue
 		}
 
-		// Reset file status to pending
+		// Reset file status to pending in DB
+		tc.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+			Where("torrent_id = ? AND `index` = ?", torrentRecord.ID, file.Index).
+			Updates(map[string]interface{}{
+				"cloud_upload_status": torrentModel.CloudUploadStatusPending,
+				"cloud_upload_error":  "",
+			})
+
+		// Update in-memory record for summary recalculation
 		torrentRecord.Files[i].CloudUploadStatus = torrentModel.CloudUploadStatusPending
 		torrentRecord.Files[i].CloudUploadError = ""
 		retriedCount++

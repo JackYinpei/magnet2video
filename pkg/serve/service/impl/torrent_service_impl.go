@@ -159,10 +159,11 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 	}
 
 	// Convert to model files with selection status
-	files := make(torrentModel.TorrentFiles, len(torrentInfo.Files))
+	files := make([]torrentModel.TorrentFile, len(torrentInfo.Files))
 	for i, f := range torrentInfo.Files {
 		fileType := torrentModel.DetectFileType(f.Path)
 		files[i] = torrentModel.TorrentFile{
+			Index:        i,
 			Path:         f.Path,
 			Size:         f.Size,
 			IsSelected:   selectedMap[i],
@@ -209,7 +210,6 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 			"deleted":               false,
 			"name":                  torrentInfo.Name,
 			"total_size":            torrentInfo.TotalSize,
-			"files":                 files,
 			"transcode_status":      torrentModel.TranscodeStatusNone,
 			"transcode_progress":    0,
 			"transcoded_count":      0,
@@ -227,6 +227,12 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 
 		if err := ts.dbManager.DB().Model(&existingTorrent).Updates(updates).Error; err != nil {
 			ts.loggerManager.Logger().Errorf("failed to update torrent record: %v", err)
+			return nil, err
+		}
+
+		// Replace files using association
+		if err := ts.dbManager.DB().Model(&existingTorrent).Association("Files").Replace(files); err != nil {
+			ts.loggerManager.Logger().Errorf("failed to replace torrent files: %v", err)
 			return nil, err
 		}
 	}
@@ -515,7 +521,11 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) (*vo.TorrentDetailResponse, error) {
 	var t torrentModel.Torrent
 
-	if err := ts.dbManager.DB().Where("info_hash = ? AND deleted = ?", infoHash, false).
+	if err := ts.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("index asc")
+		}).
+		Where("info_hash = ? AND deleted = ?", infoHash, false).
 		First(&t).Error; err != nil {
 		ts.loggerManager.Logger().Errorf("failed to get torrent detail: %v", err)
 		return nil, err
@@ -630,6 +640,9 @@ func (ts *TorrentServiceImpl) SetPosterFromFile(c *gin.Context, req *dto.SetPost
 
 	var torrentRecord torrentModel.Torrent
 	result := ts.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("index asc")
+		}).
 		Where("info_hash = ? AND creator_id = ? AND deleted = ?", req.InfoHash, userID, false).
 		First(&torrentRecord)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -791,10 +804,14 @@ func (ts *TorrentServiceImpl) restoreTorrents() {
 	var torrents []torrentModel.Torrent
 	// Restore Downloading and Completed (for seeding) torrents
 	// StatusDownloading = 1, StatusCompleted = 2
-	err := ts.dbManager.DB().Where("deleted = ? AND status IN ?", false, []int{
-		torrentModel.StatusDownloading,
-		torrentModel.StatusCompleted,
-	}).Find(&torrents).Error
+	err := ts.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("index asc")
+		}).
+		Where("deleted = ? AND status IN ?", false, []int{
+			torrentModel.StatusDownloading,
+			torrentModel.StatusCompleted,
+		}).Find(&torrents).Error
 
 	if err != nil {
 		ts.loggerManager.Logger().Errorf("failed to load torrents for restoration: %v", err)
@@ -811,9 +828,9 @@ func (ts *TorrentServiceImpl) restoreTorrents() {
 	for _, t := range torrents {
 		// Collect selected file indices
 		var selectedFiles []int
-		for i, f := range t.Files {
+		for _, f := range t.Files {
 			if f.IsSelected {
-				selectedFiles = append(selectedFiles, i)
+				selectedFiles = append(selectedFiles, f.Index)
 			}
 		}
 

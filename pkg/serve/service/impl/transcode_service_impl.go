@@ -64,7 +64,12 @@ func NewTranscodeService(
 // CheckAndQueueTranscode checks a torrent for files that need transcoding and queues jobs
 func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID int64) error {
 	var torrentRecord torrentModel.Torrent
-	if err := ts.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
+	if err := ts.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("`index` asc")
+		}).
+		Where("id = ?", torrentID).
+		First(&torrentRecord).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New("torrent not found")
 		}
@@ -154,8 +159,13 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 				continue
 			}
 
-			// Update file status to pending
-			torrentRecord.Files[i].TranscodeStatus = torrentModel.TranscodeStatusPending
+			// Update file status to pending in DB
+			ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+				Where("torrent_id = ? AND `index` = ?", torrentID, i).
+				Updates(map[string]interface{}{
+					"transcode_status": torrentModel.TranscodeStatusPending,
+					"transcode_error":  "",
+				})
 
 			// Send message to Kafka
 			msg := types.TranscodeMessage{
@@ -179,8 +189,13 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 				// Update job status to failed
 				ts.dbManager.DB().Model(&transcodeModel.TranscodeJob{}).Where("id = ?", job.ID).
 					Update("status", transcodeModel.JobStatusFailed)
-				torrentRecord.Files[i].TranscodeStatus = torrentModel.TranscodeStatusFailed
-				torrentRecord.Files[i].TranscodeError = "failed to queue transcode job"
+				// Update file status to failed
+				ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+					Where("torrent_id = ? AND `index` = ?", torrentID, i).
+					Updates(map[string]interface{}{
+						"transcode_status": torrentModel.TranscodeStatusFailed,
+						"transcode_error":  "failed to queue transcode job",
+					})
 			}
 		} else {
 			// File doesn't need transcoding, queue for cloud upload directly if enabled
@@ -200,20 +215,27 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 		}
 	}
 
-	// Update torrent record
+	// Update torrent record aggregates
 	if needsTranscode {
-		torrentRecord.TranscodeStatus = torrentModel.TranscodeStatusPending
-		torrentRecord.TotalTranscode = totalTranscode
-		torrentRecord.TranscodeProgress = 0
+		ts.dbManager.DB().Model(&torrentRecord).Updates(map[string]interface{}{
+			"transcode_status":   torrentModel.TranscodeStatusPending,
+			"total_transcode":    totalTranscode,
+			"transcode_progress": 0,
+		})
 	}
 
-	return ts.dbManager.DB().Save(&torrentRecord).Error
+	return nil
 }
 
 // GetTranscodeStatus returns the transcode status for a torrent
 func (ts *TranscodeServiceImpl) GetTranscodeStatus(c *gin.Context, torrentID int64) (*vo.TranscodeStatusResponse, error) {
 	var torrentRecord torrentModel.Torrent
-	if err := ts.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
+	if err := ts.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("`index` asc")
+		}).
+		Where("id = ?", torrentID).
+		First(&torrentRecord).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("torrent not found")
 		}
@@ -319,15 +341,16 @@ func (ts *TranscodeServiceImpl) RetryTranscode(c *gin.Context, req *dto.RetryTra
 	}
 
 	// Update torrent file status
-	var torrentRecord torrentModel.Torrent
-	if err := ts.dbManager.DB().Where("id = ?", oldJob.TorrentID).First(&torrentRecord).Error; err == nil {
-		if oldJob.FileIndex >= 0 && oldJob.FileIndex < len(torrentRecord.Files) {
-			torrentRecord.Files[oldJob.FileIndex].TranscodeStatus = torrentModel.TranscodeStatusPending
-			torrentRecord.Files[oldJob.FileIndex].TranscodeError = ""
-			torrentRecord.TranscodeStatus = torrentModel.TranscodeStatusPending
-			ts.dbManager.DB().Save(&torrentRecord)
-		}
-	}
+	ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", oldJob.TorrentID, oldJob.FileIndex).
+		Updates(map[string]interface{}{
+			"transcode_status": torrentModel.TranscodeStatusPending,
+			"transcode_error":  "",
+		})
+	
+	ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", oldJob.TorrentID).
+		Update("transcode_status", torrentModel.TranscodeStatusPending)
 
 	// Send message to Kafka
 	msg := types.TranscodeMessage{
@@ -380,14 +403,12 @@ func (ts *TranscodeServiceImpl) CancelTranscode(c *gin.Context, jobID int64) (*v
 	}
 
 	// Update torrent file status
-	var torrentRecord torrentModel.Torrent
-	if err := ts.dbManager.DB().Where("id = ?", job.TorrentID).First(&torrentRecord).Error; err == nil {
-		if job.FileIndex >= 0 && job.FileIndex < len(torrentRecord.Files) {
-			torrentRecord.Files[job.FileIndex].TranscodeStatus = torrentModel.TranscodeStatusFailed
-			torrentRecord.Files[job.FileIndex].TranscodeError = "canceled by user"
-			ts.dbManager.DB().Save(&torrentRecord)
-		}
-	}
+	ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", job.TorrentID, job.FileIndex).
+		Updates(map[string]interface{}{
+			"transcode_status": torrentModel.TranscodeStatusFailed,
+			"transcode_error":  "canceled by user",
+		})
 
 	return &vo.CancelTranscodeResponse{
 		JobID:   jobID,
@@ -436,10 +457,15 @@ func (ts *TranscodeServiceImpl) queueCloudUpload(torrentID int64, infoHash strin
 	}
 
 	// Update file cloud status to pending
-	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
-		torrentRecord.Files[fileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusPending
-		torrentRecord.TotalCloudUpload++
-	}
+	// Update file cloud status to pending
+	ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Update("cloud_upload_status", torrentModel.CloudUploadStatusPending)
+		
+	// Increment total cloud upload count on torrent
+	ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentID).
+		UpdateColumn("total_cloud_upload", gorm.Expr("total_cloud_upload + ?", 1))
 
 	msg := cloudTypes.CloudUploadMessage{
 		TorrentID:     torrentID,

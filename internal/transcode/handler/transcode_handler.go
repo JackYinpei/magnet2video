@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"gorm.io/gorm"
 
 	"github.com/Done-0/gin-scaffold/configs"
 	cloudTypes "github.com/Done-0/gin-scaffold/internal/cloud/types"
@@ -203,128 +204,183 @@ func (h *TranscodeHandler) updateJobCompleted(jobID int64, outputPath string, ou
 
 // updateTorrentProgress updates the torrent file transcode progress
 func (h *TranscodeHandler) updateTorrentProgress(torrentID int64, fileIndex int, progress int) error {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
+	// Update file transcode status directly
+	err := h.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Update("transcode_status", torrentModel.TranscodeStatusProcessing).Error
+	if err != nil {
 		return err
 	}
 
-	// Update file transcode status
-	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
-		torrentRecord.Files[fileIndex].TranscodeStatus = torrentModel.TranscodeStatusProcessing
+	// Calculate overall progress using aggregation
+	type Result struct {
+		Status int
+		Count  int
+	}
+	var results []Result
+	if err := h.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Select("transcode_status as status, count(*) as count").
+		Where("torrent_id = ? AND (source = '' OR source = 'original')", torrentID).
+		Group("transcode_status").
+		Scan(&results).Error; err != nil {
+		return err
 	}
 
-	// Calculate overall progress
-	var totalProgress int
+	var totalProgress int // Estimate: completed=100, processing=progress, pending=0
 	var count int
-	for _, file := range torrentRecord.Files {
-		if file.Source != "" && file.Source != "original" {
-			continue
+
+	for _, r := range results {
+		c := r.Count
+		s := r.Status
+		if s == torrentModel.TranscodeStatusProcessing || s == torrentModel.TranscodeStatusPending {
+			count += c
+			// For processing, we use the passed progress for the CURRENT file, 
+			// but we don't know progress of other processing files. 
+			// Original code: "if processing... count++". 
+			// It only added 'progress' (the arg) ONCE to totalProgress, and 100*completed.
+			// It averaged (totalProgress + currentFileProgress) / processingCount.
+			// This logic seems slightly flawed if multiple files are processing (concurrency).
+			// But assuming single worker per file or simple approximation:
+			
+			// Actually, the original logic was:
+			// totalProgress += 100 * completedCount
+			// count = processing + pending + completed
+			// avg = (totalProgress + progress) / count.
+			// This assumes 'progress' is the SUM of progress of all processing files? No, it's just 'progress' argument.
+			// Meaning it only accounts for the CURRENT file's progress. 
+			// This suggests the progress bar only tracks the *currently reporting* file plus completed ones.
+			// Let's stick to simple approximation or just replicate original logic.
 		}
-		if file.TranscodeStatus == torrentModel.TranscodeStatusProcessing ||
-			file.TranscodeStatus == torrentModel.TranscodeStatusPending {
-			count++
-		}
-		if file.TranscodeStatus == torrentModel.TranscodeStatusCompleted {
-			totalProgress += 100
-			count++
+		if s == torrentModel.TranscodeStatusCompleted {
+			totalProgress += 100 * c
+			count += c
 		}
 	}
 
+	var overallProgress int
 	if count > 0 {
-		torrentRecord.TranscodeProgress = (totalProgress + progress) / count
+		overallProgress = (totalProgress + progress) / count
 	}
 
-	return h.dbManager.DB().Save(&torrentRecord).Error
+	return h.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentID).
+		Update("transcode_progress", overallProgress).Error
 }
 
 // updateTorrentFileTranscoded updates the original torrent file and appends a transcoded file entry.
 // Returns the index of the new transcoded file entry.
 func (h *TranscodeHandler) updateTorrentFileTranscoded(torrentID int64, fileIndex int, transcodedPath string, outputSize int64) (int, error) {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
+	// 1. Get source file
+	var sourceFile torrentModel.TorrentFile
+	if err := h.dbManager.DB().Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).First(&sourceFile).Error; err != nil {
 		return -1, err
 	}
 
-	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
-		torrentRecord.Files[fileIndex].TranscodeStatus = torrentModel.TranscodeStatusCompleted
-		torrentRecord.Files[fileIndex].TranscodedPath = transcodedPath
-		torrentRecord.Files[fileIndex].TranscodeError = ""
-		torrentRecord.TranscodedCount++
-		parentPath := torrentRecord.Files[fileIndex].Path
-		torrentRecord.Files = append(torrentRecord.Files, torrentModel.TorrentFile{
-			Path:         transcodedPath,
-			Size:         outputSize,
-			IsSelected:   true,
-			IsShareable:  false,
-			IsStreamable: true,
-			Type:         "video",
-			Source:       "transcoded",
-			ParentPath:   parentPath,
-		})
-		newIndex := len(torrentRecord.Files) - 1
-		if err := h.dbManager.DB().Save(&torrentRecord).Error; err != nil {
-			return -1, err
-		}
-		return newIndex, nil
+	// 2. Update source file
+	if err := h.dbManager.DB().Model(&sourceFile).Updates(map[string]interface{}{
+		"transcode_status": torrentModel.TranscodeStatusCompleted,
+		"transcoded_path":  transcodedPath,
+		"transcode_error":  "",
+	}).Error; err != nil {
+		return -1, err
 	}
 
-	return -1, h.dbManager.DB().Save(&torrentRecord).Error
+	// 3. Determine new index
+	var count int64
+	h.dbManager.DB().Model(&torrentModel.TorrentFile{}).Where("torrent_id = ?", torrentID).Count(&count)
+	newIndex := int(count)
+
+	// 4. Create new file
+	newFile := torrentModel.TorrentFile{
+		TorrentID:    torrentID,
+		Index:        newIndex,
+		Path:         transcodedPath,
+		Size:         outputSize,
+		IsSelected:   true,
+		IsShareable:  false,
+		IsStreamable: true,
+		Type:         "video",
+		Source:       "transcoded",
+		ParentPath:   sourceFile.Path,
+	}
+
+	if err := h.dbManager.DB().Create(&newFile).Error; err != nil {
+		return -1, err
+	}
+
+	return newIndex, nil
 }
 
 // updateTorrentFileStatus updates the torrent file transcode status
 func (h *TranscodeHandler) updateTorrentFileStatus(torrentID int64, fileIndex int, status int, errorMsg string) error {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
-		return err
+	updates := map[string]interface{}{
+		"transcode_status": status,
+	}
+	if errorMsg != "" {
+		updates["transcode_error"] = errorMsg
 	}
 
-	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
-		torrentRecord.Files[fileIndex].TranscodeStatus = status
-		if errorMsg != "" {
-			torrentRecord.Files[fileIndex].TranscodeError = errorMsg
-		}
-	}
-
-	return h.dbManager.DB().Save(&torrentRecord).Error
+	return h.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Updates(updates).Error
 }
 
 // checkAndUpdateTorrentTranscodeStatus checks and updates overall torrent transcode status
 func (h *TranscodeHandler) checkAndUpdateTorrentTranscodeStatus(torrentID int64) error {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
+	type Result struct {
+		Status int
+		Count  int
+	}
+	var results []Result
+	// Count files by status (excluding derived files for status checking? Original code filtered source != "original" for counting)
+	if err := h.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Select("transcode_status as status, count(*) as count").
+		Where("torrent_id = ? AND (source = '' OR source = 'original')", torrentID).
+		Group("transcode_status").
+		Scan(&results).Error; err != nil {
 		return err
 	}
 
 	var pending, processing, completed, failed int
-	for _, file := range torrentRecord.Files {
-		if file.Source != "" && file.Source != "original" {
-			continue
-		}
-		switch file.TranscodeStatus {
+	for _, r := range results {
+		s := r.Status
+		c := r.Count
+		switch s {
 		case torrentModel.TranscodeStatusPending:
-			pending++
+			pending += c
 		case torrentModel.TranscodeStatusProcessing:
-			processing++
+			processing += c
 		case torrentModel.TranscodeStatusCompleted:
-			completed++
+			completed += c
 		case torrentModel.TranscodeStatusFailed:
-			failed++
+			failed += c
 		}
 	}
 
+	updates := map[string]interface{}{
+		"transcode_status": torrentModel.TranscodeStatusNone,
+		"transcode_progress": 0,
+	}
+	
+	if completed > 0 {
+		updates["transcoded_count"] = completed
+	}
+	
 	// Determine overall status
 	if processing > 0 {
-		torrentRecord.TranscodeStatus = torrentModel.TranscodeStatusProcessing
+		updates["transcode_status"] = torrentModel.TranscodeStatusProcessing
 	} else if pending > 0 {
-		torrentRecord.TranscodeStatus = torrentModel.TranscodeStatusPending
+		updates["transcode_status"] = torrentModel.TranscodeStatusPending
 	} else if failed > 0 && completed == 0 {
-		torrentRecord.TranscodeStatus = torrentModel.TranscodeStatusFailed
+		updates["transcode_status"] = torrentModel.TranscodeStatusFailed
 	} else if completed > 0 || (completed == 0 && pending == 0 && processing == 0 && failed == 0) {
-		torrentRecord.TranscodeStatus = torrentModel.TranscodeStatusCompleted
-		torrentRecord.TranscodeProgress = 100
+		updates["transcode_status"] = torrentModel.TranscodeStatusCompleted
+		updates["transcode_progress"] = 100
 	}
 
-	return h.dbManager.DB().Save(&torrentRecord).Error
+	return h.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentID).
+		Updates(updates).Error
 }
 
 // queueCloudUpload sends a cloud upload job to the queue
@@ -380,17 +436,15 @@ func (h *TranscodeHandler) queueCloudUpload(ctx context.Context, torrentID int64
 
 // updateTorrentFileCloudPending marks a file's cloud upload status as pending
 func (h *TranscodeHandler) updateTorrentFileCloudPending(torrentID int64, fileIndex int) {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", torrentID).First(&torrentRecord).Error; err != nil {
-		return
-	}
+	// Increment total cloud upload count on torrent
+	h.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentID).
+		UpdateColumn("total_cloud_upload", gorm.Expr("total_cloud_upload + ?", 1))
 
-	if fileIndex >= 0 && fileIndex < len(torrentRecord.Files) {
-		torrentRecord.Files[fileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusPending
-		torrentRecord.TotalCloudUpload++
-	}
-
-	h.dbManager.DB().Save(&torrentRecord)
+	// Update file status
+	h.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Update("cloud_upload_status", torrentModel.CloudUploadStatusPending)
 }
 
 // extractSubtitles extracts subtitle streams from the input video file
@@ -413,17 +467,19 @@ func (h *TranscodeHandler) extractSubtitles(ctx context.Context, msg types.Trans
 
 // saveSubtitleInfo saves extracted subtitle info as flat file entries and queues cloud uploads
 func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results []ffmpeg.SubtitleExtractResult) {
-	var torrentRecord torrentModel.Torrent
-	if err := h.dbManager.DB().Where("id = ?", msg.TorrentID).First(&torrentRecord).Error; err != nil {
-		h.loggerManager.Logger().Errorf("failed to load torrent for subtitle update: %v", err)
+	// 1. Get source file for parent path
+	var sourceFile torrentModel.TorrentFile
+	if err := h.dbManager.DB().Where("torrent_id = ? AND `index` = ?", msg.TorrentID, msg.FileIndex).First(&sourceFile).Error; err != nil {
+		h.loggerManager.Logger().Errorf("failed to load source file for subtitle update: %v", err)
 		return
 	}
+	parentPath := sourceFile.Path
 
-	if msg.FileIndex < 0 || msg.FileIndex >= len(torrentRecord.Files) {
-		return
-	}
+	// 2. Get next index
+	var count int64
+	h.dbManager.DB().Model(&torrentModel.TorrentFile{}).Where("torrent_id = ?", msg.TorrentID).Count(&count)
+	nextIndex := int(count)
 
-	parentPath := torrentRecord.Files[msg.FileIndex].Path
 	type queuedSubtitle struct {
 		index  int
 		result ffmpeg.SubtitleExtractResult
@@ -431,7 +487,9 @@ func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results 
 	var queued []queuedSubtitle
 
 	for _, r := range results {
-		torrentRecord.Files = append(torrentRecord.Files, torrentModel.TorrentFile{
+		newFile := torrentModel.TorrentFile{
+			TorrentID:     msg.TorrentID,
+			Index:         nextIndex,
 			Path:          r.FilePath,
 			Size:          r.FileSize,
 			IsSelected:    true,
@@ -446,17 +504,18 @@ func (h *TranscodeHandler) saveSubtitleInfo(msg types.TranscodeMessage, results 
 			Title:         r.Title,
 			Format:        r.Format,
 			OriginalCodec: r.OriginalCodec,
-		})
-		newIndex := len(torrentRecord.Files) - 1
+		}
+		
+		if err := h.dbManager.DB().Create(&newFile).Error; err != nil {
+			h.loggerManager.Logger().Errorf("failed to save subtitle info: %v", err)
+			continue
+		}
+		
 		queued = append(queued, queuedSubtitle{
-			index:  newIndex,
+			index:  nextIndex,
 			result: r,
 		})
-	}
-
-	if err := h.dbManager.DB().Save(&torrentRecord).Error; err != nil {
-		h.loggerManager.Logger().Errorf("failed to save subtitle info: %v", err)
-		return
+		nextIndex++
 	}
 
 	for _, q := range queued {

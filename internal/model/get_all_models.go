@@ -14,6 +14,7 @@ func GetAllModels() []any {
 	return []any{
 		&user.User{},             // User model
 		&torrent.Torrent{},       // Torrent model
+		&torrent.TorrentFile{},   // TorrentFile model
 		&transcode.TranscodeJob{}, // Transcode job model
 	}
 }

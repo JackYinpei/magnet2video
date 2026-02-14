@@ -39,10 +39,10 @@ func seedTranscodeData(t *testing.T, dbMgr *MockDatabaseManager) (torrentID int6
 		CreatorID:       500,
 		TranscodeStatus: torrentModel.TranscodeStatusPending,
 		TotalTranscode:  2,
-		Files: torrentModel.TorrentFiles{
-			{Path: "video1.mkv", Size: 1000000, IsSelected: true, IsStreamable: true, Type: "video", Source: "original", TranscodeStatus: torrentModel.TranscodeStatusFailed},
-			{Path: "video2.mkv", Size: 2000000, IsSelected: true, IsStreamable: true, Type: "video", Source: "original", TranscodeStatus: torrentModel.TranscodeStatusPending},
-			{Path: "sub.srt", Size: 5000, IsSelected: true, Type: "subtitle", Source: "original"},
+		Files: []torrentModel.TorrentFile{
+			{Index: 0, Path: "video1.mkv", Size: 1000000, IsSelected: true, IsStreamable: true, Type: "video", Source: "original", TranscodeStatus: torrentModel.TranscodeStatusFailed},
+			{Index: 1, Path: "video2.mkv", Size: 2000000, IsSelected: true, IsStreamable: true, Type: "video", Source: "original", TranscodeStatus: torrentModel.TranscodeStatusPending},
+			{Index: 2, Path: "sub.srt", Size: 5000, IsSelected: true, Type: "subtitle", Source: "original"},
 		},
 	}
 	torrent.ID = 2001
@@ -189,7 +189,7 @@ func TestTranscodeService_RetryTranscode(t *testing.T) {
 
 			// Verify torrent file status was reset to pending
 			var torrent torrentModel.Torrent
-			dbMgr.DB().Where("id = ?", 2001).First(&torrent)
+			dbMgr.DB().Preload("Files").Where("id = ?", 2001).First(&torrent)
 			if torrent.Files[0].TranscodeStatus != torrentModel.TranscodeStatusPending {
 				t.Errorf("RetryTranscode() file transcode status = %d, want %d",
 					torrent.Files[0].TranscodeStatus, torrentModel.TranscodeStatusPending)
@@ -247,7 +247,7 @@ func TestTranscodeService_CancelTranscode(t *testing.T) {
 
 			// Verify torrent file status was updated
 			var torrent torrentModel.Torrent
-			dbMgr.DB().Where("id = ?", 2001).First(&torrent)
+			dbMgr.DB().Preload("Files").Where("id = ?", 2001).First(&torrent)
 			if torrent.Files[1].TranscodeStatus != torrentModel.TranscodeStatusFailed {
 				t.Errorf("CancelTranscode() file transcode status = %d, want %d",
 					torrent.Files[1].TranscodeStatus, torrentModel.TranscodeStatusFailed)
