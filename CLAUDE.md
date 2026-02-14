@@ -66,6 +66,19 @@ go test ./internal/utils/errorx/...
 
 # 显示详细输出
 go test -v ./...
+
+# S3 集成测试(无本机 Go 环境时,通过 Docker 运行)
+# 说明:
+# - 会执行真实上传 + Signed URL 下载校验
+# - 需配置好 configs/config.prod.yml 或相关 S3 环境变量
+sudo docker run --rm -it \
+  -e RUN_S3_INTEGRATION_TEST=1 \
+  -v "$PWD":/workspace \
+  -w /workspace \
+  -v gomodcache:/go/pkg/mod \
+  -v gobuildcache:/root/.cache/go-build \
+  golang:1.25-alpine \
+  sh -c "/usr/local/go/bin/go test ./internal/cloud/internal -run '^TestS3UploadWithProdConfig$' -v -count=1"
 ```
 
 ### 代码质量工具

@@ -296,11 +296,20 @@ func (m *s3Manager) generateSignedURLV2(ctx context.Context, objectPath string, 
 	}
 	escapedKey := escapeS3ObjectKey(key)
 
+	var rawPath string
 	if m.usePathStyle {
-		endpointURL.Path = joinURLPath(endpointURL.Path, m.cfg.CloudStorageConfig.BucketName, escapedKey)
+		rawPath = joinURLPath(endpointURL.Path, m.cfg.CloudStorageConfig.BucketName, escapedKey)
 	} else {
 		endpointURL.Host = fmt.Sprintf("%s.%s", m.cfg.CloudStorageConfig.BucketName, endpointURL.Host)
-		endpointURL.Path = joinURLPath(endpointURL.Path, escapedKey)
+		rawPath = joinURLPath(endpointURL.Path, escapedKey)
+	}
+	// Set RawPath to the pre-encoded path so that url.URL.String() uses it directly,
+	// avoiding double-encoding (e.g. %E5 → %25E5) of non-ASCII characters.
+	endpointURL.RawPath = rawPath
+	if decoded, err := url.PathUnescape(rawPath); err == nil {
+		endpointURL.Path = decoded
+	} else {
+		endpointURL.Path = rawPath
 	}
 
 	expires := strconv.FormatInt(time.Now().UTC().Add(expiration).Unix(), 10)
