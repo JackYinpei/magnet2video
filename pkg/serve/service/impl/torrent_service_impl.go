@@ -523,7 +523,7 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 
 	if err := ts.dbManager.DB().
 		Preload("Files", func(db *gorm.DB) *gorm.DB {
-			return db.Order("index asc")
+			return db.Order("`index` asc")
 		}).
 		Where("info_hash = ? AND deleted = ?", infoHash, false).
 		First(&t).Error; err != nil {
@@ -641,7 +641,7 @@ func (ts *TorrentServiceImpl) SetPosterFromFile(c *gin.Context, req *dto.SetPost
 	var torrentRecord torrentModel.Torrent
 	result := ts.dbManager.DB().
 		Preload("Files", func(db *gorm.DB) *gorm.DB {
-			return db.Order("index asc")
+			return db.Order("`index` asc")
 		}).
 		Where("info_hash = ? AND creator_id = ? AND deleted = ?", req.InfoHash, userID, false).
 		First(&torrentRecord)
@@ -806,7 +806,7 @@ func (ts *TorrentServiceImpl) restoreTorrents() {
 	// StatusDownloading = 1, StatusCompleted = 2
 	err := ts.dbManager.DB().
 		Preload("Files", func(db *gorm.DB) *gorm.DB {
-			return db.Order("index asc")
+			return db.Order("`index` asc")
 		}).
 		Where("deleted = ? AND status IN ?", false, []int{
 			torrentModel.StatusDownloading,
