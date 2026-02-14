@@ -309,6 +309,7 @@ flowchart TB
 - **Topic**: `transcode-jobs`, `cloud-upload-jobs`
 - **消息格式**: 见 `internal/transcode/types/message.go`
 - **配置切换**: 通过 `QUEUE.TYPE` 配置选择实现(`channel` 或 `rabbitmq`)
+- **RabbitMQ 消费者自动重连**: 当 RabbitMQ 连接断开或 delivery channel 关闭时,消费者 goroutine 会自动检测并重连,使用指数退避重试(5s → 10s → 20s → ... → 最大 60s),重连成功后自动重新订阅 topic 并恢复消费。通过 `sync.Mutex` 保护并发重连安全。
 
 ##### 日志系统 (`internal/logger/`)
 - **职责**: Logrus + file-rotatelogs 实现日志轮转
@@ -340,7 +341,7 @@ flowchart TB
   - **AWS S3 / MinIO**: `internal/cloud/internal/s3_manager.go`
 - **核心接口**: `CloudStorageManager`
   - `Upload(ctx, objectPath, reader, contentType)`: 上传文件
-  - `UploadWithProgress(ctx, objectPath, reader, size, contentType, progressFn)`: 带进度回调上传
+  - `UploadWithProgress(ctx, objectPath, reader, size, contentType, progressFn)`: 带进度回调上传,大文件(>100MB)自动使用 multipart upload,上传期间每 5 分钟输出 `[upload-status]` 日志显示当前上传文件和已用时间
   - `GenerateSignedURL(ctx, objectPath, expiration)`: 生成临时访问链接
   - `Delete(ctx, objectPath)`: 删除云端文件
   - `Exists(ctx, objectPath)`: 检查文件是否存在
@@ -1371,5 +1372,5 @@ docker-compose down
 
 ---
 
-**最后更新**: 2026-02-03
+**最后更新**: 2026-02-14
 **维护者**: Done-0

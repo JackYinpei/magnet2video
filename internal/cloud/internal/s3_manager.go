@@ -198,6 +198,24 @@ func (m *s3Manager) UploadWithProgress(ctx context.Context, objectPath string, r
 		return fmt.Errorf("S3 storage is not enabled")
 	}
 
+	// Start periodic upload status logger (every 5 minutes)
+	startTime := time.Now()
+	stopLogger := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				elapsed := time.Since(startTime).Truncate(time.Second)
+				m.loggerManager.Logger().Infof("[upload-status] still uploading: %s (size: %d bytes, elapsed: %s)", objectPath, size, elapsed)
+			case <-stopLogger:
+				return
+			}
+		}
+	}()
+	defer close(stopLogger)
+
 	// Large files: use multipart upload
 	if size > multipartUploadThreshold {
 		return m.multipartUpload(ctx, objectPath, reader, contentType, size)

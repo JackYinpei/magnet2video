@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -116,13 +117,16 @@ func (p *RabbitMQProducer) Close() error {
 
 // RabbitMQConsumer receives messages from RabbitMQ
 type RabbitMQConsumer struct {
-	conn     *amqp.Connection
-	channel  *amqp.Channel
-	handler  Handler
-	exchange string
-	prefetch int
-	ctx      context.Context
-	cancel   context.CancelFunc
+	mu           sync.Mutex
+	conn         *amqp.Connection
+	channel      *amqp.Channel
+	handler      Handler
+	config       *configs.Config
+	exchange     string
+	exchangeType string
+	prefetch     int
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 // NewRabbitMQConsumer creates a new RabbitMQ consumer
@@ -175,13 +179,15 @@ func NewRabbitMQConsumer(config *configs.Config, handler Handler) (*RabbitMQCons
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &RabbitMQConsumer{
-		conn:     conn,
-		channel:  ch,
-		handler:  handler,
-		exchange: exchange,
-		prefetch: prefetch,
-		ctx:      ctx,
-		cancel:   cancel,
+		conn:         conn,
+		channel:      ch,
+		handler:      handler,
+		config:       config,
+		exchange:     exchange,
+		exchangeType: exchangeType,
+		prefetch:     prefetch,
+		ctx:          ctx,
+		cancel:       cancel,
 	}, nil
 }
 
@@ -233,13 +239,55 @@ func (c *RabbitMQConsumer) Subscribe(topics []string) error {
 	return nil
 }
 
-// consumeMessages processes messages from a delivery channel
+// consumeMessages processes messages from a delivery channel with auto-reconnect
 func (c *RabbitMQConsumer) consumeMessages(topic string, msgs <-chan amqp.Delivery) {
 	for {
 		select {
 		case d, ok := <-msgs:
 			if !ok {
-				return
+				log.Printf("RabbitMQ delivery channel closed for topic %s, attempting to reconnect...", topic)
+				backoff := 5 * time.Second
+				reconnected := false
+				for !reconnected {
+					select {
+					case <-c.ctx.Done():
+						log.Printf("RabbitMQ consumer for topic %s stopped during reconnect", topic)
+						return
+					default:
+					}
+
+					if err := c.reconnect(); err != nil {
+						log.Printf("RabbitMQ reconnect failed for topic %s: %v, retrying in %v...", topic, err, backoff)
+						select {
+						case <-time.After(backoff):
+						case <-c.ctx.Done():
+							return
+						}
+						if backoff < 60*time.Second {
+							backoff *= 2
+						}
+						continue
+					}
+
+					newMsgs, err := c.resubscribeTopic(topic)
+					if err != nil {
+						log.Printf("RabbitMQ resubscribe failed for topic %s: %v, retrying in %v...", topic, err, backoff)
+						select {
+						case <-time.After(backoff):
+						case <-c.ctx.Done():
+							return
+						}
+						if backoff < 60*time.Second {
+							backoff *= 2
+						}
+						continue
+					}
+
+					msgs = newMsgs
+					reconnected = true
+					log.Printf("RabbitMQ consumer reconnected successfully for topic %s", topic)
+				}
+				continue
 			}
 
 			msg := &Message{
@@ -260,6 +308,76 @@ func (c *RabbitMQConsumer) consumeMessages(topic string, msgs <-chan amqp.Delive
 			return
 		}
 	}
+}
+
+// reconnect re-establishes the RabbitMQ connection and channel
+func (c *RabbitMQConsumer) reconnect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check if connection is already healthy (another goroutine may have reconnected)
+	if c.conn != nil && !c.conn.IsClosed() && c.channel != nil {
+		return nil
+	}
+
+	// Close existing resources
+	if c.channel != nil {
+		c.channel.Close()
+		c.channel = nil
+	}
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
+
+	conn, err := amqp.Dial(c.config.QueueConfig.RabbitMQ.URL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("failed to open channel: %w", err)
+	}
+
+	if err := ch.ExchangeDeclare(c.exchange, c.exchangeType, true, false, false, false, nil); err != nil {
+		ch.Close()
+		conn.Close()
+		return fmt.Errorf("failed to declare exchange: %w", err)
+	}
+
+	if err := ch.Qos(c.prefetch, 0, false); err != nil {
+		ch.Close()
+		conn.Close()
+		return fmt.Errorf("failed to set QoS: %w", err)
+	}
+
+	c.conn = conn
+	c.channel = ch
+	return nil
+}
+
+// resubscribeTopic re-declares queue, binds it, and starts consuming
+func (c *RabbitMQConsumer) resubscribeTopic(topic string) (<-chan amqp.Delivery, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	q, err := c.channel.QueueDeclare(topic, true, false, false, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to declare queue %s: %w", topic, err)
+	}
+
+	if err := c.channel.QueueBind(q.Name, topic, c.exchange, false, nil); err != nil {
+		return nil, fmt.Errorf("failed to bind queue %s: %w", topic, err)
+	}
+
+	msgs, err := c.channel.Consume(q.Name, "", false, false, false, false, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to consume from queue %s: %w", topic, err)
+	}
+
+	return msgs, nil
 }
 
 // Close gracefully shuts down the consumer
