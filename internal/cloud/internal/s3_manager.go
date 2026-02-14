@@ -4,6 +4,7 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -16,8 +17,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/Done-0/gin-scaffold/configs"
 	"github.com/Done-0/gin-scaffold/internal/logger"
@@ -26,12 +27,14 @@ import (
 // Multipart upload threshold: files larger than 100MB use multipart upload
 const multipartUploadThreshold = 100 * 1024 * 1024 // 100MB
 
+// Multipart upload part size
+const multipartPartSize = 64 * 1024 * 1024 // 64MB per part
+
 // s3Manager implements CloudStorageManager for AWS S3 and S3-compatible storage
 type s3Manager struct {
 	cfg           *configs.Config
 	loggerManager logger.LoggerManager
 	client        *s3.Client
-	uploader      *manager.Uploader
 	presignClient *s3.PresignClient
 	credentials   aws.CredentialsProvider
 	usePathStyle  bool
@@ -107,12 +110,6 @@ func (m *s3Manager) initialize() error {
 		m.presignClient = s3.NewPresignClient(m.client)
 	}
 
-	// Create uploader with multipart support for large files
-	m.uploader = manager.NewUploader(m.client, func(u *manager.Uploader) {
-		u.PartSize = 64 * 1024 * 1024 // 64MB per part
-		u.Concurrency = 3             // 3 concurrent uploads
-	})
-
 	// Verify bucket access
 	_, err = m.client.HeadBucket(ctx, &s3.HeadBucketInput{
 		Bucket: aws.String(m.cfg.CloudStorageConfig.BucketName),
@@ -120,7 +117,6 @@ func (m *s3Manager) initialize() error {
 	if err != nil {
 		m.client = nil
 		m.presignClient = nil
-		m.uploader = nil
 		m.credentials = nil
 		return fmt.Errorf("failed to access bucket %s: %w", m.cfg.CloudStorageConfig.BucketName, err)
 	}
@@ -242,26 +238,82 @@ func (m *s3Manager) UploadWithProgress(ctx context.Context, objectPath string, r
 	return nil
 }
 
-// multipartUpload uploads a large file using S3 multipart upload
+// multipartUpload uploads a large file using S3 multipart upload API with explicit ContentLength per part,
+// avoiding chunked transfer encoding which corrupts data on some S3-compatible storage (e.g. Ceph RGW).
 func (m *s3Manager) multipartUpload(ctx context.Context, objectPath string, reader io.Reader, contentType string, size int64) error {
-	input := &s3.PutObjectInput{
-		Bucket: aws.String(m.cfg.CloudStorageConfig.BucketName),
-		Key:    aws.String(objectPath),
-		Body:   reader,
-	}
+	bucket := aws.String(m.cfg.CloudStorageConfig.BucketName)
+	key := aws.String(objectPath)
 
+	createInput := &s3.CreateMultipartUploadInput{
+		Bucket: bucket,
+		Key:    key,
+	}
 	if contentType != "" {
-		input.ContentType = aws.String(contentType)
+		createInput.ContentType = aws.String(contentType)
 	}
 
-	m.loggerManager.Logger().Infof("Starting multipart upload: %s (size: %d bytes, partSize: 64MB)", objectPath, size)
-
-	_, err := m.uploader.Upload(ctx, input)
+	createOut, err := m.client.CreateMultipartUpload(ctx, createInput)
 	if err != nil {
-		return fmt.Errorf("failed to upload to %s: %w", objectPath, err)
+		return fmt.Errorf("failed to create multipart upload for %s: %w", objectPath, err)
+	}
+	uploadID := createOut.UploadId
+
+	m.loggerManager.Logger().Infof("Starting multipart upload: %s (size: %d bytes, partSize: %dMB)",
+		objectPath, size, multipartPartSize/(1024*1024))
+
+	buf := make([]byte, multipartPartSize)
+	var completedParts []s3types.CompletedPart
+	var partNumber int32 = 1
+
+	for {
+		n, readErr := io.ReadFull(reader, buf)
+		if n > 0 {
+			partOut, err := m.client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket:        bucket,
+				Key:           key,
+				UploadId:      uploadID,
+				PartNumber:    aws.Int32(partNumber),
+				Body:          bytes.NewReader(buf[:n]),
+				ContentLength: aws.Int64(int64(n)),
+			})
+			if err != nil {
+				_, _ = m.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+					Bucket: bucket, Key: key, UploadId: uploadID,
+				})
+				return fmt.Errorf("failed to upload part %d of %s: %w", partNumber, objectPath, err)
+			}
+
+			completedParts = append(completedParts, s3types.CompletedPart{
+				PartNumber: aws.Int32(partNumber),
+				ETag:       partOut.ETag,
+			})
+			m.loggerManager.Logger().Infof("Uploaded part %d: %s (%d bytes)", partNumber, objectPath, n)
+			partNumber++
+		}
+		if readErr != nil {
+			if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+				break
+			}
+			_, _ = m.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				Bucket: bucket, Key: key, UploadId: uploadID,
+			})
+			return fmt.Errorf("failed to read data for %s: %w", objectPath, readErr)
+		}
 	}
 
-	m.loggerManager.Logger().Infof("Multipart upload completed: %s (size: %d bytes)", objectPath, size)
+	_, err = m.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   bucket,
+		Key:      key,
+		UploadId: uploadID,
+		MultipartUpload: &s3types.CompletedMultipartUpload{
+			Parts: completedParts,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to complete multipart upload for %s: %w", objectPath, err)
+	}
+
+	m.loggerManager.Logger().Infof("Multipart upload completed: %s (size: %d bytes, parts: %d)", objectPath, size, len(completedParts))
 	return nil
 }
 
