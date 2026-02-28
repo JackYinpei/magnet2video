@@ -146,6 +146,7 @@ CLOUD_STORAGE:
   BUCKET_NAME: "your-bucket-name"                  # GCS Bucket 名称（通过环境变量覆盖）
   SIGNED_URL_EXPIRE_HOURS: 3                       # Signed URL 过期时间（小时）
   PATH_PREFIX: "torrents"                          # 对象存储路径前缀
+  PUBLIC_URL: "https://s3.example.com/example-bucket/" # 公共访问的基础URL，配置后将直接返回直链而不进行预签名
   # S3 专用
   REGION: "us-east-1"                              # AWS 区域
   ACCESS_KEY_ID: "your-access-key"

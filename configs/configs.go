@@ -168,6 +168,7 @@ type CloudStorageConfig struct {
 	BucketName           string `mapstructure:"BUCKET_NAME"`             // Cloud storage bucket name
 	SignedURLExpireHours int    `mapstructure:"SIGNED_URL_EXPIRE_HOURS"` // Signed URL expiration time in hours (default 3)
 	PathPrefix           string `mapstructure:"PATH_PREFIX"`             // Object path prefix (default "torrents")
+	PublicURL            string `mapstructure:"PUBLIC_URL"`              // Public base URL to directly access cloud files without signed URLs
 
 	// GCS specific
 	CredentialsFile string `mapstructure:"CREDENTIALS_FILE"` // GCS service account JSON file path
@@ -286,6 +287,7 @@ func bindEnvVariables() {
 	_ = v.BindEnv("CLOUD_STORAGE.BUCKET_NAME", "GCS_BUCKET_NAME")
 	_ = v.BindEnv("CLOUD_STORAGE.ADDRESSING_STYLE", "S3_ADDRESSING_STYLE")
 	_ = v.BindEnv("CLOUD_STORAGE.SIGNATURE_VERSION", "S3_SIGNATURE_VERSION")
+	_ = v.BindEnv("CLOUD_STORAGE.PUBLIC_URL", "CLOUD_STORAGE_PUBLIC_URL")
 }
 
 // overrideFromEnv overrides config values from environment variables
@@ -395,6 +397,9 @@ func overrideFromEnv(config *Config) {
 	}
 	if val := os.Getenv("S3_BUCKET_NAME"); val != "" {
 		config.CloudStorageConfig.BucketName = val
+	}
+	if val := os.Getenv("CLOUD_STORAGE_PUBLIC_URL"); val != "" {
+		config.CloudStorageConfig.PublicURL = val
 	}
 }
 

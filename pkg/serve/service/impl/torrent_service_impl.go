@@ -230,9 +230,17 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 			return nil, err
 		}
 
-		// Replace files using association
-		if err := ts.dbManager.DB().Model(&existingTorrent).Association("Files").Replace(files); err != nil {
-			ts.loggerManager.Logger().Errorf("failed to replace torrent files: %v", err)
+		// Delete old files and insert new ones because torrent_id cannot be null
+		if err := ts.dbManager.DB().Where("torrent_id = ?", existingTorrent.ID).Delete(&torrentModel.TorrentFile{}).Error; err != nil {
+			ts.loggerManager.Logger().Errorf("failed to delete old torrent files: %v", err)
+			return nil, err
+		}
+
+		for i := range files {
+			files[i].TorrentID = existingTorrent.ID
+		}
+		if err := ts.dbManager.DB().Create(&files).Error; err != nil {
+			ts.loggerManager.Logger().Errorf("failed to create new torrent files: %v", err)
 			return nil, err
 		}
 	}

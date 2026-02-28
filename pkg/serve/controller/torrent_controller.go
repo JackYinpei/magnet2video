@@ -373,6 +373,36 @@ func (tc *TorrentController) ServeFile(c *gin.Context) {
 		return
 	}
 
+	// Try to lookup file in DB and redirect to cloud if uploaded
+	if tc.cloudStorageManager.IsEnabled() {
+		cleanParamPath := strings.TrimPrefix(filePath, "/")
+		var torrentRecord torrentModel.Torrent
+		if err := tc.dbManager.DB().Preload("Files").
+			Where("info_hash = ? AND deleted = ?", infoHash, false).
+			First(&torrentRecord).Error; err == nil {
+
+			for _, file := range torrentRecord.Files {
+				if (file.Source == "" || file.Source == "original") && strings.HasSuffix(file.Path, cleanParamPath) {
+					if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted && file.CloudPath != "" {
+						publicURL := tc.config.CloudStorageConfig.PublicURL
+						if publicURL != "" {
+							redirectURL := strings.TrimRight(publicURL, "/") + "/" + strings.TrimLeft(file.CloudPath, "/")
+							c.Redirect(http.StatusFound, redirectURL)
+							return
+						}
+
+						expiration := tc.cloudStorageManager.GetSignedURLExpiration()
+						if signedURL, err := tc.cloudStorageManager.GenerateSignedURL(c.Request.Context(), file.CloudPath, expiration); err == nil {
+							c.Redirect(http.StatusFound, signedURL)
+							return
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
 	// Try to get file stream (with fuzzy matching support)
 	reader, fileInfo, err := tc.torrentService.GetFileStream(c, infoHash, filePath)
 	if err != nil {
@@ -406,6 +436,31 @@ func (tc *TorrentController) ServeTranscodedFile(c *gin.Context) {
 	if !strings.HasSuffix(filePath, "_transcoded.mp4") {
 		c.JSON(http.StatusForbidden, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "only transcoded files can be served"))))
 		return
+	}
+
+	// Try to lookup file in DB and redirect to cloud if uploaded
+	if tc.cloudStorageManager.IsEnabled() {
+		cleanParamPath := strings.TrimPrefix(filePath, "/")
+		var file torrentModel.TorrentFile
+		if err := tc.dbManager.DB().
+			Where("path LIKE ? AND source = ?", "%"+cleanParamPath, "transcoded").
+			First(&file).Error; err == nil {
+
+			if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted && file.CloudPath != "" {
+				publicURL := tc.config.CloudStorageConfig.PublicURL
+				if publicURL != "" {
+					redirectURL := strings.TrimRight(publicURL, "/") + "/" + strings.TrimLeft(file.CloudPath, "/")
+					c.Redirect(http.StatusFound, redirectURL)
+					return
+				}
+
+				expiration := tc.cloudStorageManager.GetSignedURLExpiration()
+				if signedURL, err := tc.cloudStorageManager.GenerateSignedURL(c.Request.Context(), file.CloudPath, expiration); err == nil {
+					c.Redirect(http.StatusFound, signedURL)
+					return
+				}
+			}
+		}
 	}
 
 	// Build full path (download directory + file path)
@@ -505,6 +560,12 @@ func (tc *TorrentController) resolvePosterPath(infoHash string, posterPath strin
 			return ""
 		}
 		objectPath := strings.TrimPrefix(posterPath, consts.PosterPathCloudPrefix)
+		
+		publicURL := tc.config.CloudStorageConfig.PublicURL
+		if publicURL != "" {
+			return strings.TrimRight(publicURL, "/") + "/" + strings.TrimLeft(objectPath, "/")
+		}
+
 		expiration := tc.cloudStorageManager.GetSignedURLExpiration()
 		signedURL, err := tc.cloudStorageManager.GenerateSignedURL(context.Background(), objectPath, expiration)
 		if err != nil {
@@ -589,7 +650,17 @@ func (tc *TorrentController) GetCloudURL(c *gin.Context) {
 		return
 	}
 
-	// Generate signed URL
+	// Generate signed URL or Public URL
+	publicURL := tc.config.CloudStorageConfig.PublicURL
+	if publicURL != "" {
+		redirectURL := strings.TrimRight(publicURL, "/") + "/" + strings.TrimLeft(file.CloudPath, "/")
+		c.JSON(http.StatusOK, vo.Success(c, pkgVo.CloudURLResponse{
+			URL:       redirectURL,
+			ExpiresAt: 0,
+		}))
+		return
+	}
+
 	expiration := tc.cloudStorageManager.GetSignedURLExpiration()
 	signedURL, err := tc.cloudStorageManager.GenerateSignedURL(context.Background(), file.CloudPath, expiration)
 	if err != nil {
