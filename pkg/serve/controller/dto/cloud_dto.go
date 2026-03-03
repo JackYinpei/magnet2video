@@ -13,3 +13,9 @@ type GetCloudURLRequest struct {
 type RetryCloudUploadRequest struct {
 	InfoHash string `json:"info_hash" validate:"required"` // Info hash of the torrent
 }
+
+// RetryCloudUploadFileRequest request for retrying cloud upload for a single file
+type RetryCloudUploadFileRequest struct {
+	InfoHash  string `json:"info_hash" validate:"required"`  // Info hash of the torrent
+	FileIndex int    `json:"file_index" validate:"gte=0"`    // Index of the file to re-upload
+}

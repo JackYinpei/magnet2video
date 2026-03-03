@@ -64,5 +64,8 @@ func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 
 		// Retry failed cloud uploads
 		protectedTorrent.POST("/cloud-upload/retry", container.TorrentController.RetryCloudUpload)
+
+		// Retry cloud upload for a single file
+		protectedTorrent.POST("/cloud-upload/retry-file", container.TorrentController.RetryCloudUploadFile)
 	}
 }

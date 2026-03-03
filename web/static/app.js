@@ -545,8 +545,8 @@ function renderLibrary(torrents, container, isOwner) {
         <div class="poster-card" data-infohash="${torrent.info_hash}">
             <div class="poster-image">
                 ${torrent.poster_path
-            ? `<img src="${torrent.poster_path}" alt="${torrent.name}">`
-            : '🎬'}
+                ? `<img src="${torrent.poster_path}" alt="${torrent.name}">`
+                : '🎬'}
             </div>
             <div class="poster-info">
                 <div class="poster-title" title="${torrent.name}">${torrent.name}</div>
@@ -955,14 +955,38 @@ function renderCloudUploadStatus(torrent) {
     const statusText = getCloudUploadText(torrent.cloud_upload_status);
     const statusClass = getCloudUploadClass(torrent.cloud_upload_status);
     const hasFailed = torrent.cloud_upload_status === 4 && (torrent.total_cloud_upload || 0) > 0;
+    const cloudFiles = torrent.cloud_files || [];
+
+    // Per-file cloud upload details
+    let filesHtml = '';
+    if (cloudFiles.length > 0) {
+        filesHtml = `
+            <div class="cloud-files-list" style="margin-top:6px;">
+                ${cloudFiles.map(f => {
+            const fStatusText = getCloudUploadText(f.cloud_upload_status);
+            const fStatusClass = getCloudUploadClass(f.cloud_upload_status);
+            const fName = f.file_name || `文件 #${f.file_index}`;
+            return `
+                        <div class="cloud-file-item" style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:0.85em;">
+                            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${fName}">${fName}</span>
+                            <span class="transcode-badge ${fStatusClass}" style="flex-shrink:0;">${fStatusText}</span>
+                            <button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:2px 8px;font-size:0.8em;"
+                                    onclick="retryCloudUploadFile('${torrent.info_hash}', ${f.file_index}, this)">重新上传</button>
+                        </div>
+                    `;
+        }).join('')}
+            </div>
+        `;
+    }
 
     return `
         <div class="download-transcode">
             <div class="download-transcode-label">
                 云上传: <span class="transcode-badge ${statusClass}">${statusText}</span>
                 ${total > 0 ? `(${uploaded}/${total} 文件)` : ''}
-                ${hasFailed ? `<button class="btn btn-sm btn-warning" style="margin-left:8px" onclick="retryCloudUpload('${torrent.info_hash}')">重新上传</button>` : ''}
+                ${hasFailed ? `<button class="btn btn-sm btn-warning" style="margin-left:8px" onclick="retryCloudUpload('${torrent.info_hash}')">全部重新上传</button>` : ''}
             </div>
+            ${filesHtml}
         </div>
     `;
 }
@@ -981,6 +1005,27 @@ async function retryCloudUpload(infoHash) {
         loadDownloads();
     } catch (error) {
         showToast(error.message || '重新上传失败', 'error');
+    }
+}
+
+async function retryCloudUploadFile(infoHash, fileIndex, btnElement) {
+    try {
+        if (btnElement) {
+            btnElement.disabled = true;
+            btnElement.textContent = '上传中...';
+        }
+        const data = await apiRequest(`${TORRENT_API}/cloud-upload/retry-file`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: infoHash, file_index: fileIndex })
+        });
+        showToast(data.message || '已重新排队上传', 'success');
+        loadDownloads();
+    } catch (error) {
+        showToast(error.message || '重新上传失败', 'error');
+        if (btnElement) {
+            btnElement.disabled = false;
+            btnElement.textContent = '重新上传';
+        }
     }
 }
 
@@ -1074,8 +1119,8 @@ async function openPlayer(infoHash, isOwner = false) {
 
                 // Source badge
                 const sourceLabel = file.source === 'transcoded' ? ' <span class="source-badge transcoded">转码</span>'
-                                  : file.source === 'extracted' ? ' <span class="source-badge extracted">提取</span>'
-                                  : '';
+                    : file.source === 'extracted' ? ' <span class="source-badge extracted">提取</span>'
+                        : '';
 
                 // Transcode status text (only for original video files)
                 const transcodeStatusText = file.source === 'original' ? getFileTranscodeStatus(file) : '';
@@ -1290,14 +1335,18 @@ async function setVisibilityFromPlayer(infoHash, visibility) {
 }
 
 // Get local file URL for playback
+function encodePathSegments(path) {
+    return path.split('/').map(segment => encodeURIComponent(segment)).join('/');
+}
+
 function getLocalFileUrl(filePath) {
     if (filePath.endsWith('_transcoded.mp4')) {
         // For transcoded files, use the transcoded endpoint
         let relativePath = filePath.replace(/^\.\/download\//, '').replace(/^\/download\//, '').replace(/^download\//, '');
-        return `${TORRENT_API}/transcoded/${encodeURIComponent(relativePath)}`;
+        return `${TORRENT_API}/transcoded/${encodePathSegments(relativePath)}`;
     } else {
         // For original files, use the standard endpoint
-        return `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(filePath)}`;
+        return `${TORRENT_API}/file/${currentInfoHash}/${encodePathSegments(filePath)}`;
     }
 }
 
@@ -1321,7 +1370,7 @@ async function playFile(filePath, originalPath = null, fileIndex = -1) {
 
     // Find file info to check cloud upload status
     const fileInfo = currentTorrentFiles.find(f => f.path === filePath) ||
-                     currentTorrentFiles.find(f => f.path === (originalPath || filePath));
+        currentTorrentFiles.find(f => f.path === (originalPath || filePath));
 
     // Check if file is uploaded to cloud and get signed URL
     let videoUrl;
@@ -1391,7 +1440,7 @@ async function loadAndAttachSubtitle(subtitlePath) {
         return;
     }
 
-    const subtitleUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodeURIComponent(subtitlePath)}`;
+    const subtitleUrl = `${TORRENT_API}/file/${currentInfoHash}/${encodePathSegments(subtitlePath)}`;
     const vttBlobUrl = await loadSubtitle(subtitleUrl, subtitlePath);
 
     if (vttBlobUrl) {
@@ -1562,9 +1611,8 @@ function renderAdminUsers(users, total) {
             <td>${user.email}</td>
             <td>${user.nickname}</td>
             <td>
-                <span class="role-badge ${user.is_super_admin ? 'super' : user.role}">${
-                    user.is_super_admin ? '超级管理员' : (user.role === 'admin' ? '管理员' : '普通用户')
-                }</span>
+                <span class="role-badge ${user.is_super_admin ? 'super' : user.role}">${user.is_super_admin ? '超级管理员' : (user.role === 'admin' ? '管理员' : '普通用户')
+        }</span>
             </td>
             <td>${user.torrent_count || 0}</td>
             <td>${formatDate(user.created_at)}</td>
@@ -1703,7 +1751,7 @@ function renderAdminPagination(containerId, total, currentPage, onPageChange) {
 }
 
 // Global pagination handler
-window.adminPageChange = function(containerId, page) {
+window.adminPageChange = function (containerId, page) {
     if (window.adminPaginationCallbacks && window.adminPaginationCallbacks[containerId]) {
         window.adminPaginationCallbacks[containerId](page);
     }

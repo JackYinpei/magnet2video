@@ -386,7 +386,11 @@ func (ts *TorrentServiceImpl) ListTorrents(c *gin.Context) (*vo.TorrentListRespo
 		}
 
 		// 缓存未命中或出错，从数据库加载
-		query := ts.dbManager.DB().Where("deleted = ? AND creator_id = ?", false, userID)
+		query := ts.dbManager.DB().
+			Preload("Files", func(db *gorm.DB) *gorm.DB {
+				return db.Select("id, torrent_id, `index`, path, cloud_upload_status, cloud_upload_error").Order("`index` asc")
+			}).
+			Where("deleted = ? AND creator_id = ?", false, userID)
 		if err := query.Order("created_at DESC").Find(&cachedTorrents).Error; err != nil {
 			ts.loggerManager.Logger().Errorf("failed to list torrents: %v", err)
 			return nil, err
@@ -438,7 +442,11 @@ func (ts *TorrentServiceImpl) ListPublicTorrents(c *gin.Context) (*vo.TorrentLis
 		}
 
 		// 缓存未命中或出错，从数据库加载
-		query := ts.dbManager.DB().Where("deleted = ?", false)
+		query := ts.dbManager.DB().
+			Preload("Files", func(db *gorm.DB) *gorm.DB {
+				return db.Select("id, torrent_id, `index`, path, cloud_upload_status, cloud_upload_error").Order("`index` asc")
+			}).
+			Where("deleted = ?", false)
 		if isLoggedIn {
 			query = query.Where("visibility IN ?", []int{torrentModel.VisibilityInternal, torrentModel.VisibilityPublic})
 		} else {
@@ -490,6 +498,22 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 			CloudUploadStatus:  t.CloudUploadStatus,
 			CloudUploadedCount: t.CloudUploadedCount,
 			TotalCloudUpload:   t.TotalCloudUpload,
+		}
+
+		// Populate per-file cloud upload info when there are cloud uploads
+		if t.TotalCloudUpload > 0 && len(t.Files) > 0 {
+			cloudFiles := make([]vo.CloudFileInfo, 0, len(t.Files))
+			for _, f := range t.Files {
+				if f.CloudUploadStatus != torrentModel.CloudUploadStatusNone {
+					cloudFiles = append(cloudFiles, vo.CloudFileInfo{
+						FileIndex:         f.Index,
+						FileName:          filepath.Base(f.Path),
+						CloudUploadStatus: f.CloudUploadStatus,
+						CloudUploadError:  f.CloudUploadError,
+					})
+				}
+			}
+			items[i].CloudFiles = cloudFiles
 		}
 
 		// Mix in real-time stats if downloading or seeding

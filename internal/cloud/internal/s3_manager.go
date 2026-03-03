@@ -79,6 +79,13 @@ func (m *s3Manager) initialize() error {
 		opts = append(opts, awsconfig.WithRegion(m.cfg.CloudStorageConfig.Region))
 	}
 
+	// For S3-compatible providers (e.g. Ceph RGW), avoid SDK's default checksum
+	// trailers ("aws-chunked" + x-amz-checksum-*) which may be persisted as object bytes.
+	opts = append(opts,
+		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
+	)
+
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config: %w", err)

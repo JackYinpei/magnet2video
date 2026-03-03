@@ -384,9 +384,7 @@ func (tc *TorrentController) ServeFile(c *gin.Context) {
 			for _, file := range torrentRecord.Files {
 				if (file.Source == "" || file.Source == "original") && strings.HasSuffix(file.Path, cleanParamPath) {
 					if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted && file.CloudPath != "" {
-						publicURL := tc.config.CloudStorageConfig.PublicURL
-						if publicURL != "" {
-							redirectURL := strings.TrimRight(publicURL, "/") + "/" + strings.TrimLeft(file.CloudPath, "/")
+						if redirectURL := tc.buildPublicCloudURL(file.CloudPath); redirectURL != "" {
 							c.Redirect(http.StatusFound, redirectURL)
 							return
 						}
@@ -447,9 +445,7 @@ func (tc *TorrentController) ServeTranscodedFile(c *gin.Context) {
 			First(&file).Error; err == nil {
 
 			if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted && file.CloudPath != "" {
-				publicURL := tc.config.CloudStorageConfig.PublicURL
-				if publicURL != "" {
-					redirectURL := strings.TrimRight(publicURL, "/") + "/" + strings.TrimLeft(file.CloudPath, "/")
+				if redirectURL := tc.buildPublicCloudURL(file.CloudPath); redirectURL != "" {
 					c.Redirect(http.StatusFound, redirectURL)
 					return
 				}
@@ -560,10 +556,9 @@ func (tc *TorrentController) resolvePosterPath(infoHash string, posterPath strin
 			return ""
 		}
 		objectPath := strings.TrimPrefix(posterPath, consts.PosterPathCloudPrefix)
-		
-		publicURL := tc.config.CloudStorageConfig.PublicURL
-		if publicURL != "" {
-			return strings.TrimRight(publicURL, "/") + "/" + strings.TrimLeft(objectPath, "/")
+
+		if publicURL := tc.buildPublicCloudURL(objectPath); publicURL != "" {
+			return publicURL
 		}
 
 		expiration := tc.cloudStorageManager.GetSignedURLExpiration()
@@ -584,6 +579,25 @@ func (tc *TorrentController) resolvePosterPath(infoHash string, posterPath strin
 func (tc *TorrentController) buildLocalPosterURL(infoHash string, relPath string) string {
 	escaped := url.PathEscape(relPath)
 	return fmt.Sprintf("/api/v1/torrent/file/%s/%s", infoHash, escaped)
+}
+
+func (tc *TorrentController) buildPublicCloudURL(objectPath string) string {
+	baseURL := strings.TrimSpace(tc.config.CloudStorageConfig.PublicURL)
+	if baseURL == "" {
+		return ""
+	}
+
+	trimmedPath := strings.TrimLeft(objectPath, "/")
+	if trimmedPath == "" {
+		return strings.TrimRight(baseURL, "/") + "/"
+	}
+
+	segments := strings.Split(trimmedPath, "/")
+	for i, segment := range segments {
+		segments[i] = url.PathEscape(segment)
+	}
+
+	return strings.TrimRight(baseURL, "/") + "/" + strings.Join(segments, "/")
 }
 
 func (tc *TorrentController) buildPosterObjectPath(infoHash string, filename string) string {
@@ -622,6 +636,10 @@ func (tc *TorrentController) GetCloudURL(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "invalid file_index"))))
 		return
 	}
+	if fileIndex < 0 {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "file_index out of range"))))
+		return
+	}
 
 	// Check if cloud storage is enabled
 	if !tc.cloudStorageManager.IsEnabled() {
@@ -636,13 +654,17 @@ func (tc *TorrentController) GetCloudURL(c *gin.Context) {
 		return
 	}
 
-	// Check file index
-	if fileIndex < 0 || fileIndex >= len(torrentRecord.Files) {
-		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "file_index out of range"))))
+	var file torrentModel.TorrentFile
+	if err := tc.dbManager.DB().
+		Where("torrent_id = ? AND `index` = ?", torrentRecord.ID, fileIndex).
+		First(&file).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "file_index out of range"))))
+			return
+		}
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer)))
 		return
 	}
-
-	file := torrentRecord.Files[fileIndex]
 
 	// Check if file is uploaded to cloud
 	if file.CloudUploadStatus != torrentModel.CloudUploadStatusCompleted || file.CloudPath == "" {
@@ -651,9 +673,7 @@ func (tc *TorrentController) GetCloudURL(c *gin.Context) {
 	}
 
 	// Generate signed URL or Public URL
-	publicURL := tc.config.CloudStorageConfig.PublicURL
-	if publicURL != "" {
-		redirectURL := strings.TrimRight(publicURL, "/") + "/" + strings.TrimLeft(file.CloudPath, "/")
+	if redirectURL := tc.buildPublicCloudURL(file.CloudPath); redirectURL != "" {
 		c.JSON(http.StatusOK, vo.Success(c, pkgVo.CloudURLResponse{
 			URL:       redirectURL,
 			ExpiresAt: 0,
@@ -805,6 +825,125 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 		InfoHash:     req.InfoHash,
 		RetriedCount: retriedCount,
 		Message:      fmt.Sprintf("Re-queued %d file(s) for cloud upload", retriedCount),
+	}))
+}
+
+// RetryCloudUploadFile handles retrying cloud upload for a single file
+// @Router /api/v1/torrent/cloud-upload/retry-file [post]
+func (tc *TorrentController) RetryCloudUploadFile(c *gin.Context) {
+	if !tc.cloudStorageManager.IsEnabled() {
+		c.JSON(http.StatusServiceUnavailable, vo.Fail(c, nil, errorx.New(errno.ErrCloudStorageDisabled)))
+		return
+	}
+
+	req := &dto.RetryCloudUploadFileRequest{}
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "bind JSON failed"))))
+		return
+	}
+
+	userID := auth.GetUserID(c)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, vo.Fail(c, nil, errorx.New(errno.ErrUnauthorized)))
+		return
+	}
+
+	// Find torrent and verify ownership
+	var torrentRecord torrentModel.Torrent
+	if err := tc.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("`index` asc")
+		}).
+		Where("info_hash = ? AND creator_id = ? AND deleted = ?", req.InfoHash, userID, false).
+		First(&torrentRecord).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, vo.Fail(c, nil, errorx.New(errno.ErrTorrentNotFound, errorx.KV("info_hash", req.InfoHash))))
+			return
+		}
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer)))
+		return
+	}
+
+	// Validate file index
+	if req.FileIndex < 0 || req.FileIndex >= len(torrentRecord.Files) {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "file_index out of range"))))
+		return
+	}
+
+	file := torrentRecord.Files[req.FileIndex]
+
+	// Determine local path
+	localPath := resolveRetryLocalPath(torrentRecord, file)
+
+	// Build cloud path
+	pathPrefix := tc.config.CloudStorageConfig.PathPrefix
+	if pathPrefix == "" {
+		pathPrefix = "torrents"
+	}
+	fileName := filepath.Base(localPath)
+	cloudPath := fmt.Sprintf("%s/%s/%s", pathPrefix, torrentRecord.InfoHash, fileName)
+
+	// Determine content type
+	contentType := getContentType(localPath)
+	if contentType == "application/octet-stream" {
+		contentType = ""
+	}
+
+	// Get file size
+	var fileSize int64
+	if info, err := os.Stat(localPath); err == nil {
+		fileSize = info.Size()
+	} else {
+		fileSize = file.Size
+	}
+
+	// Build and send message
+	msg := cloudTypes.CloudUploadMessage{
+		TorrentID:     torrentRecord.ID,
+		InfoHash:      torrentRecord.InfoHash,
+		FileIndex:     file.Index,
+		SubtitleIndex: -1,
+		LocalPath:     localPath,
+		CloudPath:     cloudPath,
+		ContentType:   contentType,
+		FileSize:      fileSize,
+		IsTranscoded:  file.Source == "transcoded",
+		CreatorID:     torrentRecord.CreatorID,
+		RetryCount:    0,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer)))
+		return
+	}
+
+	if err := tc.queueProducer.Send(context.Background(), cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer)))
+		return
+	}
+
+	// Reset file status to pending in DB
+	tc.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentRecord.ID, file.Index).
+		Updates(map[string]interface{}{
+			"cloud_upload_status": torrentModel.CloudUploadStatusPending,
+			"cloud_upload_error":  "",
+		})
+
+	// Update in-memory record for summary recalculation
+	torrentRecord.Files[req.FileIndex].CloudUploadStatus = torrentModel.CloudUploadStatusPending
+	torrentRecord.Files[req.FileIndex].CloudUploadError = ""
+
+	// Recalculate torrent cloud summary
+	recalculateTorrentCloudSummary(&torrentRecord)
+	torrentRecord.CloudUploadStatus = torrentModel.CloudUploadStatusPending
+	tc.dbManager.DB().Save(&torrentRecord)
+
+	c.JSON(http.StatusOK, vo.Success(c, pkgVo.RetryCloudUploadResponse{
+		InfoHash:     req.InfoHash,
+		RetriedCount: 1,
+		Message:      fmt.Sprintf("Re-queued file #%d for cloud upload", req.FileIndex),
 	}))
 }
 

@@ -79,26 +79,35 @@ type RemoveTorrentResponse struct {
 	Message  string `json:"message"`   // Status message
 }
 
+// CloudFileInfo represents minimal per-file cloud upload info for the list view
+type CloudFileInfo struct {
+	FileIndex         int    `json:"file_index"`                   // File index
+	FileName          string `json:"file_name"`                    // File name (basename)
+	CloudUploadStatus int    `json:"cloud_upload_status"`          // Cloud upload status: 0=none, 1=pending, 2=uploading, 3=completed, 4=failed
+	CloudUploadError  string `json:"cloud_upload_error,omitempty"` // Error message if failed
+}
+
 // TorrentListItem represents a torrent in the list response
 type TorrentListItem struct {
-	InfoHash              string  `json:"info_hash"`               // Info hash
-	Name                  string  `json:"name"`                    // Torrent name
-	TotalSize             int64   `json:"total_size"`              // Total size in bytes
-	Progress              float64 `json:"progress"`                // Progress percentage
-	Status                int     `json:"status"`                  // Status code
-	PosterPath            string  `json:"poster_path"`             // Poster path or URL
-	CreatedAt             int64   `json:"created_at"`              // Creation timestamp
-	DownloadSpeed         int64   `json:"download_speed"`          // Bytes per second
-	DownloadSpeedReadable string  `json:"download_speed_readable"` // Human readable speed
-	IsPublic              bool    `json:"is_public"`               // Whether the torrent is publicly shared (deprecated, use visibility)
-	Visibility            int     `json:"visibility"`              // Visibility level: 0=private, 1=internal, 2=public
-	TranscodeStatus       int     `json:"transcode_status"`        // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
-	TranscodeProgress     int     `json:"transcode_progress"`      // Transcode progress 0-100
-	TranscodedCount       int     `json:"transcoded_count"`        // Number of transcoded files
-	TotalTranscode        int     `json:"total_transcode"`         // Total files needing transcode
-	CloudUploadStatus     int     `json:"cloud_upload_status"`     // Cloud upload status: 0=none, 1=pending, 2=uploading, 3=completed, 4=failed
-	CloudUploadedCount    int     `json:"cloud_uploaded_count"`    // Number of uploaded files
-	TotalCloudUpload      int     `json:"total_cloud_upload"`      // Total files needing upload
+	InfoHash              string          `json:"info_hash"`               // Info hash
+	Name                  string          `json:"name"`                    // Torrent name
+	TotalSize             int64           `json:"total_size"`              // Total size in bytes
+	Progress              float64         `json:"progress"`                // Progress percentage
+	Status                int             `json:"status"`                  // Status code
+	PosterPath            string          `json:"poster_path"`             // Poster path or URL
+	CreatedAt             int64           `json:"created_at"`              // Creation timestamp
+	DownloadSpeed         int64           `json:"download_speed"`          // Bytes per second
+	DownloadSpeedReadable string          `json:"download_speed_readable"` // Human readable speed
+	IsPublic              bool            `json:"is_public"`               // Whether the torrent is publicly shared (deprecated, use visibility)
+	Visibility            int             `json:"visibility"`              // Visibility level: 0=private, 1=internal, 2=public
+	TranscodeStatus       int             `json:"transcode_status"`        // Transcode status: 0=none, 1=pending, 2=processing, 3=completed, 4=failed
+	TranscodeProgress     int             `json:"transcode_progress"`      // Transcode progress 0-100
+	TranscodedCount       int             `json:"transcoded_count"`        // Number of transcoded files
+	TotalTranscode        int             `json:"total_transcode"`         // Total files needing transcode
+	CloudUploadStatus     int             `json:"cloud_upload_status"`     // Cloud upload status: 0=none, 1=pending, 2=uploading, 3=completed, 4=failed
+	CloudUploadedCount    int             `json:"cloud_uploaded_count"`    // Number of uploaded files
+	TotalCloudUpload      int             `json:"total_cloud_upload"`      // Total files needing upload
+	CloudFiles            []CloudFileInfo `json:"cloud_files,omitempty"`   // Per-file cloud upload status
 }
 
 // TorrentListResponse response for listing torrents
