@@ -197,9 +197,7 @@ type Config struct {
 
 // Configuration file path constants
 const (
-	DefaultConfigPath = "./configs/config.local.yml" // Default configuration file path
-	LocalConfigPath   = "./configs/config.local.yml" // Local development configuration
-	ProdConfigPath    = "./configs/config.prod.yml"  // Production environment configuration
+	ConfigPath = "./configs/config.yml" // Configuration file path
 )
 
 var (
@@ -219,21 +217,10 @@ func New() error {
 	// Bind environment variables for sensitive/environment-specific configs
 	bindEnvVariables()
 
-	env := os.Getenv("ENV")
-	var configPath string
-	switch env {
-	case "prod", "production":
-		configPath = ProdConfigPath
-	case "local", "development":
-		configPath = LocalConfigPath
-	default:
-		configPath = DefaultConfigPath
-	}
-
-	v.SetConfigFile(configPath)
+	v.SetConfigFile(ConfigPath)
 
 	if err := v.ReadInConfig(); err != nil {
-		return fmt.Errorf("failed to read config file %s: %w", configPath, err)
+		return fmt.Errorf("failed to read config file %s: %w", ConfigPath, err)
 	}
 
 	var config Config

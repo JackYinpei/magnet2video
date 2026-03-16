@@ -1,5 +1,5 @@
 # ===========================================
-# 生产环境应用配置 (YAML - 支持热重载)
+# 应用配置 (YAML - 支持热重载)
 # 敏感配置请在 .env 文件中设置
 # ===========================================
 
@@ -7,7 +7,7 @@ APP:
   APP_NAME: "gin-scaffold"
   # CORS 跨域相关
   CORS:
-    ALLOW_ORIGINS: ["https://yourdomain.com"] # 生产环境应指定具体域名
+    ALLOW_ORIGINS: ["*"] # 允许的源，生产环境应指定具体域名，如 ["https://yourdomain.com"]
     ALLOW_METHODS: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"] # 允许的HTTP方法
     ALLOW_HEADERS: ["Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"] # 允许的请求头
     EXPOSE_HEADERS: ["Content-Length", "Authorization"] # 暴露的响应头
@@ -56,9 +56,9 @@ LOG:
 # 消息队列相关
 # ===========================================
 QUEUE:
-  TYPE: "rabbitmq"                       # 生产环境使用 RabbitMQ
+  TYPE: "channel"                       # 队列类型: "channel"(内存，无需外部服务) 或 "rabbitmq"
   RABBITMQ:
-    URL: "amqp://guest:guest@rabbitmq:5672/"
+    URL: "amqp://guest:guest@localhost:5672/"
     EXCHANGE: "transcode"
     EXCHANGE_TYPE: "direct"
     PREFETCH_COUNT: 1
@@ -87,7 +87,7 @@ AI:
           TIMEOUT: 720
           MAX_RETRIES: 1
           RATE_LIMIT: "60/min"
-        
+
         # 硅基流动 DeepSeek
         - NAME: "siliconflow"
           ENABLED: true
@@ -102,7 +102,7 @@ AI:
           TIMEOUT: 720            # AI响应超时时间（秒）
           MAX_RETRIES: 1
           RATE_LIMIT: "60/min"
-          
+
     gemini:
       ENABLED: false # 是否启用该提供商
       INSTANCES:
@@ -111,8 +111,6 @@ AI:
           ENABLED: true # 是否启用此实例
           BASE_URL: "https://generativelanguage.googleapis.com"
           KEYS:
-            - "YOUR_API_KEY"
-            - "YOUR_API_KEY"
             - "YOUR_API_KEY"
           MODELS:
             - "gemini-2.5-pro"
@@ -130,7 +128,7 @@ AI:
 # ===========================================
 TORRENT:
   DOWNLOAD_DIR: "./download"      # 下载目录
-  UPLOAD_RATE_LIMIT: 100          # 上传速度限制 (KB/s)，100KB/s ≈ 259GB/月
+  UPLOAD_RATE_LIMIT: 0            # 上传速度限制 (KB/s)，0=不限制
   DOWNLOAD_RATE_LIMIT: 0          # 下载速度限制 (KB/s)，0=不限制
   ENABLE_SEEDING: true            # 是否启用做种
   LISTEN_PORT: 42069              # BT P2P 监听端口
@@ -140,13 +138,13 @@ TORRENT:
 # 敏感配置请在 .env 中设置: GCS_CREDENTIALS_FILE, GCS_BUCKET_NAME
 # ===========================================
 CLOUD_STORAGE:
-  ENABLED: false                                    # 是否启用云存储上传（生产环境建议启用）
+  ENABLED: false                                    # 是否启用云存储上传
   PROVIDER: "gcs"                                   # 云存储提供商: gcs 或 s3
-  CREDENTIALS_FILE: "/secrets/gcs-sa.json"         # GCS Service Account JSON 文件路径
-  BUCKET_NAME: "your-bucket-name"                  # GCS Bucket 名称（通过环境变量覆盖）
+  CREDENTIALS_FILE: "./credentials/gcs-sa.json"    # GCS Service Account JSON 文件路径
+  BUCKET_NAME: "your-bucket-name"                  # GCS Bucket 名称
   SIGNED_URL_EXPIRE_HOURS: 3                       # Signed URL 过期时间（小时）
   PATH_PREFIX: "torrents"                          # 对象存储路径前缀
-  PUBLIC_URL: "https://s3.example.com/example-bucket/" # 公共访问的基础URL，配置后将直接返回直链而不进行预签名
+  PUBLIC_URL: ""                                   # 公共访问的基础URL，配置后将直接返回直链而不进行预签名
   # S3 专用
   REGION: "us-east-1"                              # AWS 区域
   ACCESS_KEY_ID: "your-access-key"

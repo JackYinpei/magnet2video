@@ -45,7 +45,7 @@ func TestS3UploadWithProdConfig(t *testing.T) {
 
 	cfg := loadProdConfigForIntegration(t)
 	if !cfg.CloudStorageConfig.Enabled {
-		t.Fatalf("cloud storage is disabled in config.prod.yml")
+		t.Fatalf("cloud storage is disabled in config.yml")
 	}
 	if strings.ToLower(cfg.CloudStorageConfig.Provider) != "s3" {
 		t.Fatalf("cloud storage provider must be s3, got %q", cfg.CloudStorageConfig.Provider)
@@ -57,7 +57,7 @@ func TestS3UploadWithProdConfig(t *testing.T) {
 	})
 
 	if !manager.IsEnabled() {
-		t.Fatalf("S3 manager is not enabled; check bucket/endpoint/credentials in configs/config.prod.yml")
+		t.Fatalf("S3 manager is not enabled; check bucket/endpoint/credentials in configs/config.yml")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -144,7 +144,7 @@ func prodConfigPath(t *testing.T) string {
 	}
 
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
-	return filepath.Join(repoRoot, "configs", "config.prod.yml")
+	return filepath.Join(repoRoot, "configs", "config.yml")
 }
 
 func applyCloudOverridesFromEnv(cfg *configs.Config) {

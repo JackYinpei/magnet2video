@@ -29,9 +29,11 @@ gin-scaffold 是一个现代化的 Go Web 服务端脚手架，基于 Gin 框架
 git clone https://github.com/Done-0/gin-scaffold.git
 ```
 
-2. 根据 example 文件配置 `configs/config.local.yaml` 或 `configs/config.prod.yaml`
+2. 复制 `configs/config.example.yml` 为 `configs/config.yml` 并修改配置
 
-3. 启动服务
+3. Docker 部署时，复制 `.docker.env.example` 为 `.docker.env` 并修改配置
+
+4. 启动服务
 
 ```bash
 go run main.go
@@ -102,7 +104,11 @@ go run main.go
 
 本项目采用 Apache License 2.0 协议开源
 
-DOCKER COMPOSE 启动命令
+DOCKER COMPOSE 部署命令
 ``` bash
-sudo docker-compose --env-file .docker.env up -d
+# 构建镜像
+sudo docker compose build
+
+# 启动服务
+sudo docker compose --env-file .docker.env up -d
 ```

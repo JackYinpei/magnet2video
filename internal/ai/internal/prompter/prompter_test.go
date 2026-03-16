@@ -22,7 +22,7 @@ func TestPrompt(t *testing.T) {
 	configDir := filepath.Join(testDir, "configs")
 	os.MkdirAll(configDir, 0755)
 
-	configFile := filepath.Join(configDir, "config.local.yml")
+	configFile := filepath.Join(configDir, "config.yml")
 	promptDir := filepath.Join(testDir, "prompts")
 	os.MkdirAll(promptDir, 0755)
 

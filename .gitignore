@@ -2,20 +2,17 @@
 .claude/
 .history
 
-# Env files (keep examples)
+# Env files (keep example)
 .env
 .local.env
 .docker.env
-!.local.env.example
-!.docker.env.example
 gcs-sa.json
 
 # Project
 .logs/
 tmp/
 /database/
-configs/config.local.yml
-configs/config.prod.yml
+configs/config.yml
 /download
 magnet
 

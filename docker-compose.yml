@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # RabbitMQ 消息队列 (可选，仅当 QUEUE.TYPE=rabbitmq 时需要)
@@ -25,13 +25,13 @@ services:
     container_name: gin-app
     ports:
       - "${APP_PORT:-8080}:${APP_PORT:-8080}"
-      - "42069:42069"      # BT P2P TCP
-      - "42069:42069/udp"  # BT P2P UDP
+      - "42069:42069" # BT P2P TCP
+      - "42069:42069/udp" # BT P2P UDP
     volumes:
       - ./download:/app/download
       - ./configs:/app/configs
       - ./.logs:/app/.logs
-      - ./gcs-sa.json:/secrets/gcs-sa.json:ro
+      # - ./gcs-sa.json:/secrets/gcs-sa.json:ro
     env_file:
       - .docker.env
     depends_on:

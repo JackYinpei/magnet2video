@@ -45,11 +45,8 @@
 ### 运行应用
 
 ```bash
-# 本地开发(使用 configs/config.local.yml)
+# 运行应用(使用 configs/config.yml)
 go run main.go
-
-# 生产环境(使用 configs/config.prod.yml)
-ENV=prod go run main.go
 
 # Docker Compose 部署
 docker-compose up -d
@@ -70,7 +67,7 @@ go test -v ./...
 # S3 集成测试(无本机 Go 环境时,通过 Docker 运行)
 # 说明:
 # - 会执行真实上传 + Signed URL 下载校验
-# - 需配置好 configs/config.prod.yml 或相关 S3 环境变量
+# - 需配置好 configs/config.yml 或相关 S3 环境变量
 sudo docker run --rm -it \
   -e RUN_S3_INTEGRATION_TEST=1 \
   -v "$PWD":/workspace \
@@ -110,8 +107,7 @@ magnet-video/
 ├── cmd/                          # 应用入口
 │   └── gin_server.go            # 服务器初始化和生命周期管理
 ├── configs/                      # 配置文件
-│   ├── config.local.yml         # 本地开发配置
-│   ├── config.prod.yml          # 生产环境配置
+│   ├── config.yml               # 应用配置(从 config.example.yml 复制)
 │   ├── i18n/                    # 国际化资源文件(zh-CN, en-US)
 │   └── prompts/                 # AI 提示词模板(YAML)
 ├── internal/                     # 核心基础设施层(不可被外部导入)
@@ -699,9 +695,7 @@ cd pkg/wire && wire
 
 ### 启动流程
 
-1. **加载配置** (根据 `ENV` 环境变量选择配置文件)
-   - `ENV=prod` → `configs/config.prod.yml`
-   - 其他 → `configs/config.local.yml`
+1. **加载配置** (`configs/config.yml`)
 
 2. **Wire 依赖注入** → 创建 `Container`
 
@@ -876,8 +870,7 @@ sequenceDiagram
 
 ### 配置文件路径
 
-- 本地开发: `configs/config.local.yml`
-- 生产环境: `configs/config.prod.yml`
+- 配置文件: `configs/config.yml`（从 `config.example.yml` 复制后修改）
 
 ### 主要配置项
 

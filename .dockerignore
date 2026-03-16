@@ -8,7 +8,6 @@ docker-compose.yml
 .env
 .local.env
 .docker.env
-.local.env.example
 .docker.env.example
 
 # Build artifacts
