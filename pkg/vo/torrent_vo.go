@@ -108,6 +108,7 @@ type TorrentListItem struct {
 	CloudUploadedCount    int             `json:"cloud_uploaded_count"`    // Number of uploaded files
 	TotalCloudUpload      int             `json:"total_cloud_upload"`      // Total files needing upload
 	CloudFiles            []CloudFileInfo `json:"cloud_files,omitempty"`   // Per-file cloud upload status
+	LocalDeleted          bool            `json:"local_deleted"`           // Whether local files have been deleted
 }
 
 // TorrentListResponse response for listing torrents

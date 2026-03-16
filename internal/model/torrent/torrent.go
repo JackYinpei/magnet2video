@@ -35,6 +35,9 @@ type Torrent struct {
 	CloudUploadProgress int `gorm:"type:int;default:0" json:"cloud_upload_progress"` // Cloud upload progress percentage (0-100)
 	CloudUploadedCount  int `gorm:"type:int;default:0" json:"cloud_uploaded_count"`  // Number of uploaded files
 	TotalCloudUpload    int `gorm:"type:int;default:0" json:"total_cloud_upload"`    // Total number of files to upload
+
+	// Local file management
+	LocalDeleted bool `gorm:"default:false" json:"local_deleted"` // Whether local files have been deleted
 }
 
 // StringSlice is a slice of strings that can be stored in database

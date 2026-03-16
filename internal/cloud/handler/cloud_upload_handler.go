@@ -79,6 +79,10 @@ func (h *CloudUploadHandler) Handle(ctx context.Context, msg *queue.Message) err
 		h.loggerManager.Logger().Errorf("failed to update cloud upload status: %v", err)
 		return err
 	}
+	// Recalculate torrent-level cloud status so "uploading" is visible in list API
+	if err := h.checkAndUpdateTorrentCloudStatus(uploadMsg.TorrentID); err != nil {
+		h.loggerManager.Logger().Errorf("failed to update torrent cloud status: %v", err)
+	}
 
 	// Check if local file exists
 	fileInfo, err := os.Stat(uploadMsg.LocalPath)

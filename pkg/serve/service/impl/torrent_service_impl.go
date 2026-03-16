@@ -498,6 +498,7 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 			CloudUploadStatus:  t.CloudUploadStatus,
 			CloudUploadedCount: t.CloudUploadedCount,
 			TotalCloudUpload:   t.TotalCloudUpload,
+			LocalDeleted:       t.LocalDeleted,
 		}
 
 		// Populate per-file cloud upload info when there are cloud uploads
@@ -858,6 +859,16 @@ func (ts *TorrentServiceImpl) restoreTorrents() {
 	ts.loggerManager.Logger().Infof("Found %d torrents to restore", len(torrents))
 
 	for _, t := range torrents {
+		// Skip torrents whose local files have been deleted
+		if t.LocalDeleted {
+			ts.loggerManager.Logger().Infof("Skipping restore for torrent %s (local files deleted)", t.Name)
+			// Mark as paused so it won't be restored again
+			ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+				Where("id = ?", t.ID).
+				Update("status", torrentModel.StatusPaused)
+			continue
+		}
+
 		// Collect selected file indices
 		var selectedFiles []int
 		for _, f := range t.Files {

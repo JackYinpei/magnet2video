@@ -979,12 +979,29 @@ function renderCloudUploadStatus(torrent) {
         `;
     }
 
+    // Determine if delete-local button should be shown and enabled
+    const canDeleteLocal = !torrent.local_deleted &&
+        torrent.cloud_upload_status === 3 && // all uploaded
+        torrent.status !== 1; // not downloading
+    const isTransferring = torrent.status === 1 || // downloading
+        torrent.cloud_upload_status === 2; // uploading
+
+    let deleteLocalHtml = '';
+    if (torrent.local_deleted) {
+        deleteLocalHtml = `<span class="transcode-badge completed" style="margin-left:8px;">本地已删除</span>`;
+    } else if (canDeleteLocal) {
+        deleteLocalHtml = `<button class="btn btn-sm" style="margin-left:8px;color:#e74c3c;border-color:#e74c3c;" onclick="deleteLocalFiles('${torrent.info_hash}')">删除本地</button>`;
+    } else if (isTransferring) {
+        deleteLocalHtml = `<button class="btn btn-sm" style="margin-left:8px;opacity:0.4;cursor:not-allowed;" disabled>删除本地</button>`;
+    }
+
     return `
         <div class="download-transcode">
             <div class="download-transcode-label">
                 云上传: <span class="transcode-badge ${statusClass}">${statusText}</span>
                 ${total > 0 ? `(${uploaded}/${total} 文件)` : ''}
                 ${hasFailed ? `<button class="btn btn-sm btn-warning" style="margin-left:8px" onclick="retryCloudUpload('${torrent.info_hash}')">全部重新上传</button>` : ''}
+                ${deleteLocalHtml}
             </div>
             ${filesHtml}
         </div>
@@ -1026,6 +1043,23 @@ async function retryCloudUploadFile(infoHash, fileIndex, btnElement) {
             btnElement.disabled = false;
             btnElement.textContent = '重新上传';
         }
+    }
+}
+
+async function deleteLocalFiles(infoHash) {
+    if (!confirm('确定要删除本地文件吗？云端文件不受影响。')) {
+        return;
+    }
+
+    try {
+        const data = await apiRequest(`${TORRENT_API}/delete-local`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: infoHash })
+        });
+        showToast(data.message || '本地文件已删除', 'success');
+        loadDownloads();
+    } catch (error) {
+        showToast(error.message || '删除本地文件失败', 'error');
     }
 }
 

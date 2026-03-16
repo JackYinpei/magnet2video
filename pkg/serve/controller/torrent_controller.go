@@ -947,6 +947,92 @@ func (tc *TorrentController) RetryCloudUploadFile(c *gin.Context) {
 	}))
 }
 
+// DeleteLocalFiles handles deleting local files for a torrent after cloud upload
+// @Router /api/v1/torrent/delete-local [post]
+func (tc *TorrentController) DeleteLocalFiles(c *gin.Context) {
+	req := &dto.DeleteLocalFilesRequest{}
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "bind JSON failed"))))
+		return
+	}
+
+	userID := auth.GetUserID(c)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, vo.Fail(c, nil, errorx.New(errno.ErrUnauthorized)))
+		return
+	}
+
+	// Find torrent and verify ownership
+	var torrentRecord torrentModel.Torrent
+	if err := tc.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("`index` asc")
+		}).
+		Where("info_hash = ? AND creator_id = ? AND deleted = ?", req.InfoHash, userID, false).
+		First(&torrentRecord).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, vo.Fail(c, nil, errorx.New(errno.ErrTorrentNotFound, errorx.KV("info_hash", req.InfoHash))))
+			return
+		}
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer)))
+		return
+	}
+
+	// Check: all cloud-upload files must be completed
+	for _, file := range torrentRecord.Files {
+		if file.CloudUploadStatus == torrentModel.CloudUploadStatusPending ||
+			file.CloudUploadStatus == torrentModel.CloudUploadStatusUploading {
+			c.JSON(http.StatusBadRequest, vo.Fail(c, "cannot delete local files while uploading", errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "cloud upload in progress"))))
+			return
+		}
+	}
+
+	// Check: torrent must not be downloading
+	if torrentRecord.Status == torrentModel.StatusDownloading {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, "cannot delete local files while downloading", errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "download in progress"))))
+		return
+	}
+
+	// Check: already deleted
+	if torrentRecord.LocalDeleted {
+		c.JSON(http.StatusOK, vo.Success(c, map[string]string{"message": "local files already deleted"}))
+		return
+	}
+
+	// Delete local files
+	if torrentRecord.DownloadPath != "" {
+		torrentDir := filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name)
+		if info, err := os.Stat(torrentDir); err == nil && info.IsDir() {
+			os.RemoveAll(torrentDir)
+		} else {
+			// Try individual files
+			for _, file := range torrentRecord.Files {
+				localPath := resolveRetryLocalPath(torrentRecord, file)
+				if localPath != "" {
+					os.Remove(localPath)
+				}
+			}
+		}
+	}
+
+	// Mark as local deleted in DB and pause to prevent re-download on restart
+	updates := map[string]interface{}{
+		"local_deleted": true,
+	}
+	if torrentRecord.Status == torrentModel.StatusDownloading || torrentRecord.Status == torrentModel.StatusPending {
+		updates["status"] = torrentModel.StatusPaused
+	}
+	tc.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentRecord.ID).
+		Updates(updates)
+
+	// Pause the torrent in the torrent manager if active, to prevent re-seeding
+	pauseReq := &dto.PauseDownloadRequest{InfoHash: req.InfoHash}
+	_, _ = tc.torrentService.PauseDownload(c, pauseReq)
+
+	c.JSON(http.StatusOK, vo.Success(c, map[string]string{"message": "local files deleted"}))
+}
+
 func shouldRetryCloudUploadFile(file torrentModel.TorrentFile) bool {
 	// Never retry completed files.
 	if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted {
