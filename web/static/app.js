@@ -954,7 +954,9 @@ function renderCloudUploadStatus(torrent) {
 
     const statusText = getCloudUploadText(torrent.cloud_upload_status);
     const statusClass = getCloudUploadClass(torrent.cloud_upload_status);
-    const hasFailed = torrent.cloud_upload_status === 4 && (torrent.total_cloud_upload || 0) > 0;
+    // Show retry button for failed, stuck pending, or stuck uploading states
+    const needsRetry = (torrent.cloud_upload_status === 4 || torrent.cloud_upload_status === 1 || torrent.cloud_upload_status === 2)
+        && (torrent.total_cloud_upload || 0) > 0;
     const cloudFiles = torrent.cloud_files || [];
 
     // Per-file cloud upload details
@@ -966,12 +968,15 @@ function renderCloudUploadStatus(torrent) {
             const fStatusText = getCloudUploadText(f.cloud_upload_status);
             const fStatusClass = getCloudUploadClass(f.cloud_upload_status);
             const fName = f.file_name || `文件 #${f.file_index}`;
+            // Show retry button only for pending(1)/uploading(2)/failed(4) — not for none(0) or completed(3)
+            const canRetry = f.cloud_upload_status === 1 || f.cloud_upload_status === 2 || f.cloud_upload_status === 4;
+            const errorHint = f.cloud_upload_error ? ` title="${f.cloud_upload_error}"` : '';
             return `
                         <div class="cloud-file-item" style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:0.85em;">
                             <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${fName}">${fName}</span>
-                            <span class="transcode-badge ${fStatusClass}" style="flex-shrink:0;">${fStatusText}</span>
-                            <button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:2px 8px;font-size:0.8em;"
-                                    onclick="retryCloudUploadFile('${torrent.info_hash}', ${f.file_index}, this)">重新上传</button>
+                            <span class="transcode-badge ${fStatusClass}" style="flex-shrink:0;cursor:${f.cloud_upload_error ? 'help' : 'default'};"${errorHint}>${fStatusText}</span>
+                            ${canRetry ? `<button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:2px 8px;font-size:0.8em;"
+                                    onclick="retryCloudUploadFile('${torrent.info_hash}', ${f.file_index}, this)">重新上传</button>` : ''}
                         </div>
                     `;
         }).join('')}
@@ -1000,7 +1005,7 @@ function renderCloudUploadStatus(torrent) {
             <div class="download-transcode-label">
                 云上传: <span class="transcode-badge ${statusClass}">${statusText}</span>
                 ${total > 0 ? `(${uploaded}/${total} 文件)` : ''}
-                ${hasFailed ? `<button class="btn btn-sm btn-warning" style="margin-left:8px" onclick="retryCloudUpload('${torrent.info_hash}')">全部重新上传</button>` : ''}
+                ${needsRetry ? `<button class="btn btn-sm btn-warning" style="margin-left:8px" onclick="retryCloudUpload('${torrent.info_hash}')">全部重新上传</button>` : ''}
                 ${deleteLocalHtml}
             </div>
             ${filesHtml}
@@ -1009,7 +1014,7 @@ function renderCloudUploadStatus(torrent) {
 }
 
 async function retryCloudUpload(infoHash) {
-    if (!confirm('确定要重新上传失败的文件到云端吗？')) {
+    if (!confirm('确定要重新上传未完成的文件到云端吗？')) {
         return;
     }
 
