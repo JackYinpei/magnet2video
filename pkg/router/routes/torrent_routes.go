@@ -70,5 +70,14 @@ func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 
 		// Delete local files after cloud upload
 		protectedTorrent.POST("/delete-local", container.TorrentController.DeleteLocalFiles)
+
+		// Bind IMDB ID to torrent
+		protectedTorrent.POST("/imdb", container.TorrentController.BindIMDB)
+
+		// Search TMDB for movies/TV shows
+		protectedTorrent.GET("/tmdb/search", container.TorrentController.SearchTMDB)
+
+		// Get IMDB ID from TMDB ID
+		protectedTorrent.GET("/tmdb/imdb/:tmdb_id", container.TorrentController.GetTMDBImdbID)
 	}
 }

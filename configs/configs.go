@@ -182,6 +182,11 @@ type CloudStorageConfig struct {
 	SignatureVersion string `mapstructure:"SIGNATURE_VERSION"` // S3 signature version: "v4" (default) or "s3"/"v2"
 }
 
+// TMDBConfig TMDB API configuration
+type TMDBConfig struct {
+	APIKey string `mapstructure:"API_KEY"` // TMDB API key
+}
+
 // Config main configuration structure
 type Config struct {
 	AppConfig          AppConfig          `mapstructure:"APP"`           // Application configuration
@@ -193,6 +198,7 @@ type Config struct {
 	TorrentConfig      TorrentConfig      `mapstructure:"TORRENT"`       // Torrent client configuration
 	TranscodeConfig    TranscodeConfig    `mapstructure:"TRANSCODE"`     // Video transcoding configuration
 	CloudStorageConfig CloudStorageConfig `mapstructure:"CLOUD_STORAGE"` // Cloud storage configuration
+	TMDBConfig         TMDBConfig         `mapstructure:"TMDB"`          // TMDB API configuration
 }
 
 // Configuration file path constants

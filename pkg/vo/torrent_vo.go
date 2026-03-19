@@ -95,6 +95,7 @@ type TorrentListItem struct {
 	Progress              float64         `json:"progress"`                // Progress percentage
 	Status                int             `json:"status"`                  // Status code
 	PosterPath            string          `json:"poster_path"`             // Poster path or URL
+	ImdbID                string          `json:"imdb_id"`                 // IMDB ID
 	CreatedAt             int64           `json:"created_at"`              // Creation timestamp
 	DownloadSpeed         int64           `json:"download_speed"`          // Bytes per second
 	DownloadSpeedReadable string          `json:"download_speed_readable"` // Human readable speed
@@ -124,6 +125,7 @@ type TorrentDetailResponse struct {
 	TotalSize    int64             `json:"total_size"`    // Total size in bytes
 	Files        []TorrentFileInfo `json:"files"`         // Files in the torrent
 	PosterPath   string            `json:"poster_path"`   // Poster path or URL
+	ImdbID       string            `json:"imdb_id"`       // IMDB ID
 	DownloadPath string            `json:"download_path"` // Download directory path
 	Status       int               `json:"status"`        // Status code
 	Progress     float64           `json:"progress"`      // Progress percentage

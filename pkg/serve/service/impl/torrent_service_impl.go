@@ -488,6 +488,7 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 			Progress:           t.Progress,
 			Status:             t.Status,
 			PosterPath:         t.PosterPath,
+			ImdbID:             t.ImdbID,
 			CreatedAt:          t.CreatedAt,
 			IsPublic:           t.Visibility >= torrentModel.VisibilityPublic,
 			Visibility:         t.Visibility,
@@ -619,6 +620,7 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 		TotalSize:    t.TotalSize,
 		Files:        allFiles,
 		PosterPath:   t.PosterPath,
+		ImdbID:       t.ImdbID,
 		DownloadPath: t.DownloadPath,
 		Status:       t.Status,
 		Progress:     t.Progress,
@@ -748,6 +750,36 @@ func (ts *TorrentServiceImpl) UpdatePosterPath(c *gin.Context, infoHash string, 
 		InfoHash:   infoHash,
 		PosterPath: posterPath,
 		Message:    "Poster updated successfully",
+	}, nil
+}
+
+// BindIMDB binds an IMDB ID to a torrent
+func (ts *TorrentServiceImpl) BindIMDB(c *gin.Context, req *dto.BindIMDBRequest) (*vo.BindIMDBResponse, error) {
+	userID := auth.GetUserID(c)
+	if userID == 0 {
+		return nil, errors.New("unauthorized")
+	}
+	if req == nil || req.InfoHash == "" || req.ImdbID == "" {
+		return nil, errors.New("invalid request")
+	}
+
+	result := ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("info_hash = ? AND creator_id = ? AND deleted = ?", req.InfoHash, userID, false).
+		Update("imdb_id", req.ImdbID)
+	if result.Error != nil {
+		ts.loggerManager.Logger().Errorf("failed to bind IMDB ID: %v", result.Error)
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, errors.New("torrent not found or not owned by you")
+	}
+
+	ts.invalidateTorrentListCache(userID)
+
+	return &vo.BindIMDBResponse{
+		InfoHash: req.InfoHash,
+		ImdbID:   req.ImdbID,
+		Message:  "IMDB ID bound successfully",
 	}, nil
 }
 

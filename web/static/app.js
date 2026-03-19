@@ -736,13 +736,18 @@ function renderDownloads(torrents) {
         return `
         <div class="download-item" data-infohash="${torrent.info_hash}">
             <div class="download-header">
-                <div class="download-name">${torrent.name}</div>
+                <div class="download-name">
+                    ${torrent.name}
+                    ${torrent.imdb_id ? `<a href="https://www.imdb.com/title/${torrent.imdb_id}" target="_blank" class="imdb-badge" onclick="event.stopPropagation()">${torrent.imdb_id}</a>` : ''}
+                </div>
                 <div class="download-actions">
                     ${torrent.status === 1 ? `
                         <button class="btn btn-sm pause-btn" data-infohash="${torrent.info_hash}">暂停</button>
                     ` : torrent.status === 4 ? `
                         <button class="btn btn-sm resume-btn" data-infohash="${torrent.info_hash}">继续</button>
                     ` : ''}
+                    <button class="btn btn-sm" onclick="openImdbModal('${torrent.info_hash}', '${(torrent.imdb_id || '').replace(/'/g, "\\'")}')">IMDB</button>
+                    <button class="btn btn-sm" onclick="uploadPoster('${torrent.info_hash}')">上传海报</button>
                     <button class="btn btn-sm ${v === 1 ? 'btn-info' : ''}"
                             onclick="setVisibility('${torrent.info_hash}', ${v === 1 ? 0 : 1})">
                         ${v === 1 ? '✓ 内部公开' : '内部公开'}
@@ -971,10 +976,13 @@ function renderCloudUploadStatus(torrent) {
             // Show retry button only for pending(1)/uploading(2)/failed(4) — not for none(0) or completed(3)
             const canRetry = f.cloud_upload_status === 1 || f.cloud_upload_status === 2 || f.cloud_upload_status === 4;
             const errorHint = f.cloud_upload_error ? ` title="${f.cloud_upload_error}"` : '';
+            const canSetPoster = isImageFile(fName);
             return `
                         <div class="cloud-file-item" style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:0.85em;">
                             <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${fName}">${fName}</span>
                             <span class="transcode-badge ${fStatusClass}" style="flex-shrink:0;cursor:${f.cloud_upload_error ? 'help' : 'default'};"${errorHint}>${fStatusText}</span>
+                            ${canSetPoster ? `<button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:2px 8px;font-size:0.8em;"
+                                    onclick="setPosterFromDownloadList('${torrent.info_hash}', ${f.file_index})">设为海报</button>` : ''}
                             ${canRetry ? `<button class="btn btn-sm btn-ghost" style="flex-shrink:0;padding:2px 8px;font-size:0.8em;"
                                     onclick="retryCloudUploadFile('${torrent.info_hash}', ${f.file_index}, this)">重新上传</button>` : ''}
                         </div>
@@ -2038,8 +2046,200 @@ function initEventListeners() {
 
 // ============ 初始化 ============
 
+// ============ IMDB 绑定 ============
+
+let imdbTargetInfoHash = null;
+
+function openImdbModal(infoHash, existingImdbId) {
+    imdbTargetInfoHash = infoHash;
+    document.getElementById('imdb-manual-input').value = existingImdbId || '';
+    document.getElementById('tmdb-search-results').innerHTML = '';
+    document.getElementById('tmdb-search-input').value = '';
+
+    // Reset tabs to manual
+    document.querySelectorAll('.imdb-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.imdb-tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelector('.imdb-tab[data-imdb-tab="manual"]').classList.add('active');
+    document.getElementById('imdb-tab-manual').classList.add('active');
+
+    document.getElementById('imdb-modal').classList.remove('hidden');
+}
+
+function closeImdbModal() {
+    document.getElementById('imdb-modal').classList.add('hidden');
+    imdbTargetInfoHash = null;
+}
+
+async function bindImdbManual() {
+    const imdbId = document.getElementById('imdb-manual-input').value.trim();
+    if (!imdbId || !imdbTargetInfoHash) {
+        showToast('请输入 IMDB ID', 'error');
+        return;
+    }
+
+    try {
+        await apiRequest(`${TORRENT_API}/imdb`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: imdbTargetInfoHash, imdb_id: imdbId })
+        });
+        showToast('IMDB 绑定成功', 'success');
+        closeImdbModal();
+        loadDownloads();
+        loadLibrary();
+    } catch (error) {
+        showToast(error.message || 'IMDB 绑定失败', 'error');
+    }
+}
+
+async function searchTMDB() {
+    const query = document.getElementById('tmdb-search-input').value.trim();
+    if (!query) {
+        showToast('请输入搜索关键词', 'error');
+        return;
+    }
+
+    const resultsDiv = document.getElementById('tmdb-search-results');
+    resultsDiv.innerHTML = '<p style="color:var(--text-secondary);padding:8px;">搜索中...</p>';
+
+    try {
+        const data = await apiRequest(`${TORRENT_API}/tmdb/search?query=${encodeURIComponent(query)}`);
+        const results = data.results || [];
+        if (results.length === 0) {
+            resultsDiv.innerHTML = '<p style="color:var(--text-secondary);padding:8px;">未找到结果</p>';
+            return;
+        }
+
+        resultsDiv.innerHTML = results.map(r => `
+            <div class="tmdb-result-item" onclick="selectTmdbResult(${r.id}, '${r.media_type}', this)">
+                ${r.poster_path ? `<img class="tmdb-result-poster" src="${r.poster_path}" alt="">` : `<div class="tmdb-result-poster"></div>`}
+                <div class="tmdb-result-info">
+                    <div class="tmdb-result-title">${r.title || ''}</div>
+                    <div class="tmdb-result-meta">
+                        <span class="tmdb-result-badge">${r.media_type === 'tv' ? 'TV' : '电影'}</span>
+                        ${r.release_date || ''}
+                        ${r.original_title && r.original_title !== r.title ? ` · ${r.original_title}` : ''}
+                    </div>
+                    <div class="tmdb-result-overview">${r.overview || ''}</div>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        resultsDiv.innerHTML = `<p style="color:var(--danger);padding:8px;">${error.message || '搜索失败'}</p>`;
+    }
+}
+
+async function selectTmdbResult(tmdbId, mediaType, element) {
+    if (!imdbTargetInfoHash) return;
+
+    // Disable the clicked item
+    element.style.opacity = '0.5';
+    element.style.pointerEvents = 'none';
+
+    try {
+        // Fetch IMDB ID from TMDB
+        const data = await apiRequest(`${TORRENT_API}/tmdb/imdb/${tmdbId}?type=${mediaType}`);
+        const imdbId = data.imdb_id;
+
+        if (!imdbId) {
+            showToast('该条目没有 IMDB ID', 'error');
+            element.style.opacity = '1';
+            element.style.pointerEvents = 'auto';
+            return;
+        }
+
+        // Bind the IMDB ID
+        await apiRequest(`${TORRENT_API}/imdb`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: imdbTargetInfoHash, imdb_id: imdbId })
+        });
+        showToast(`已绑定 ${imdbId}`, 'success');
+        closeImdbModal();
+        loadDownloads();
+        loadLibrary();
+    } catch (error) {
+        showToast(error.message || '绑定失败', 'error');
+        element.style.opacity = '1';
+        element.style.pointerEvents = 'auto';
+    }
+}
+
+// ============ 下载列表海报操作 ============
+
+function uploadPoster(infoHash) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+        const file = input.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('info_hash', infoHash);
+        formData.append('file', file);
+
+        try {
+            const token = localStorage.getItem('token');
+            const resp = await fetch(`${TORRENT_API}/poster/upload`, {
+                method: 'POST',
+                headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+                body: formData
+            });
+            const result = await resp.json();
+            if (!resp.ok) {
+                throw new Error(result.message || '上传失败');
+            }
+            showToast('海报上传成功', 'success');
+            loadDownloads();
+            loadLibrary();
+        } catch (error) {
+            showToast(error.message || '海报上传失败', 'error');
+        }
+    };
+    input.click();
+}
+
+async function setPosterFromDownloadList(infoHash, fileIndex) {
+    try {
+        await apiRequest(`${TORRENT_API}/poster`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: infoHash, file_index: fileIndex })
+        });
+        showToast('海报设置成功', 'success');
+        loadDownloads();
+        loadLibrary();
+    } catch (error) {
+        showToast(error.message || '设置海报失败', 'error');
+    }
+}
+
+// ============ IMDB Modal 事件绑定 ============
+
+function initImdbModalListeners() {
+    document.getElementById('imdb-modal-close').addEventListener('click', closeImdbModal);
+    document.getElementById('imdb-modal-backdrop').addEventListener('click', closeImdbModal);
+    document.getElementById('imdb-manual-bind-btn').addEventListener('click', bindImdbManual);
+    document.getElementById('tmdb-search-btn').addEventListener('click', searchTMDB);
+    document.getElementById('tmdb-search-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') searchTMDB();
+    });
+    document.getElementById('imdb-manual-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') bindImdbManual();
+    });
+
+    // IMDB tab switching
+    document.querySelectorAll('.imdb-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.imdb-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.imdb-tab-content').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById(`imdb-tab-${tab.dataset.imdbTab}`).classList.add('active');
+        });
+    });
+}
+
 async function init() {
     initEventListeners();
+    initImdbModalListeners();
 
     // 尝试加载用户信息
     await loadUserProfile();
@@ -2067,3 +2267,7 @@ window.deleteUser = deleteUser;
 window.deleteAdminTorrent = deleteAdminTorrent;
 window.resetTranscode = resetTranscode;
 window.retryCloudUpload = retryCloudUpload;
+window.openImdbModal = openImdbModal;
+window.selectTmdbResult = selectTmdbResult;
+window.uploadPoster = uploadPoster;
+window.setPosterFromDownloadList = setPosterFromDownloadList;

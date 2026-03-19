@@ -17,6 +17,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/logger"
 	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/sse"
+	"github.com/Done-0/gin-scaffold/internal/tmdb"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
 
 	"github.com/Done-0/gin-scaffold/internal/redis"
@@ -39,6 +40,7 @@ type Container struct {
 	SSEManager          sse.SSEManager
 	TorrentManager      torrent.TorrentManager
 	QueueProducer       queue.Producer
+	TMDBClient          *tmdb.TMDBClient
 
 	// Controllers
 	TestController    *controller.TestController
