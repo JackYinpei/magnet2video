@@ -19,6 +19,7 @@ type Torrent struct {
 	TotalSize         int64         `gorm:"type:bigint;default:0" json:"total_size"`                 // Total size in bytes
 	Files             []TorrentFile `gorm:"foreignKey:TorrentID" json:"files"`                       // Files in the torrent
 	PosterPath        string        `gorm:"type:varchar(512)" json:"poster_path"`                    // Poster file path or URL
+	ImdbID            string        `gorm:"type:varchar(20)" json:"imdb_id"`                         // IMDB ID (e.g. tt1234567)
 	DownloadPath      string        `gorm:"type:varchar(512)" json:"download_path"`                  // Download directory path
 	Status            int           `gorm:"type:int;default:0" json:"status"`                        // Download status: 0=pending, 1=downloading, 2=completed, 3=failed, 4=paused
 	Progress          float64       `gorm:"type:decimal(5,2);default:0" json:"progress"`             // Download progress percentage

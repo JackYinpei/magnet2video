@@ -25,6 +25,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
 	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
 	"github.com/Done-0/gin-scaffold/internal/queue"
+	"github.com/Done-0/gin-scaffold/internal/tmdb"
 	"github.com/Done-0/gin-scaffold/internal/types/consts"
 	"github.com/Done-0/gin-scaffold/internal/types/errno"
 	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
@@ -43,6 +44,7 @@ type TorrentController struct {
 	dbManager           db.DatabaseManager
 	cloudStorageManager cloud.CloudStorageManager
 	queueProducer       queue.Producer
+	tmdbClient          *tmdb.TMDBClient
 }
 
 // NewTorrentController creates torrent controller
@@ -52,6 +54,7 @@ func NewTorrentController(
 	dbManager db.DatabaseManager,
 	cloudStorageManager cloud.CloudStorageManager,
 	queueProducer queue.Producer,
+	tmdbClient *tmdb.TMDBClient,
 ) *TorrentController {
 	return &TorrentController{
 		config:              config,
@@ -59,6 +62,7 @@ func NewTorrentController(
 		dbManager:           dbManager,
 		cloudStorageManager: cloudStorageManager,
 		queueProducer:       queueProducer,
+		tmdbClient:          tmdbClient,
 	}
 }
 
@@ -495,6 +499,83 @@ func (tc *TorrentController) ServeTranscodedFile(c *gin.Context) {
 
 	// Serve file with Range request support
 	http.ServeContent(c.Writer, c.Request, filepath.Base(cleanPath), fileInfo.ModTime(), file)
+}
+
+// BindIMDB handles binding an IMDB ID to a torrent
+// @Router /api/v1/torrent/imdb [post]
+func (tc *TorrentController) BindIMDB(c *gin.Context) {
+	req := &dto.BindIMDBRequest{}
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "bind JSON failed"))))
+		return
+	}
+
+	errs := validator.Validate(req)
+	if errs != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, errs, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "validation failed"))))
+		return
+	}
+
+	response, err := tc.torrentService.BindIMDB(c, req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", err.Error()))))
+		return
+	}
+
+	c.JSON(http.StatusOK, vo.Success(c, response))
+}
+
+// SearchTMDB handles searching TMDB for movies/TV shows
+// @Router /api/v1/torrent/tmdb/search [get]
+func (tc *TorrentController) SearchTMDB(c *gin.Context) {
+	if tc.tmdbClient == nil || !tc.tmdbClient.IsEnabled() {
+		c.JSON(http.StatusServiceUnavailable, vo.Fail(c, "TMDB API not configured", nil))
+		return
+	}
+
+	query := strings.TrimSpace(c.Query("query"))
+	if query == "" {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "query is required"))))
+		return
+	}
+
+	page := 1
+	if p, err := strconv.Atoi(c.Query("page")); err == nil && p > 0 {
+		page = p
+	}
+
+	result, err := tc.tmdbClient.SearchMulti(query, page)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), nil))
+		return
+	}
+
+	c.JSON(http.StatusOK, vo.Success(c, result))
+}
+
+// GetTMDBImdbID handles fetching IMDB ID from TMDB for a given TMDB ID
+// @Router /api/v1/torrent/tmdb/imdb/:tmdb_id [get]
+func (tc *TorrentController) GetTMDBImdbID(c *gin.Context) {
+	if tc.tmdbClient == nil || !tc.tmdbClient.IsEnabled() {
+		c.JSON(http.StatusServiceUnavailable, vo.Fail(c, "TMDB API not configured", nil))
+		return
+	}
+
+	tmdbIDStr := c.Param("tmdb_id")
+	tmdbID, err := strconv.Atoi(tmdbIDStr)
+	if err != nil || tmdbID <= 0 {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, nil, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "invalid tmdb_id"))))
+		return
+	}
+
+	mediaType := c.DefaultQuery("type", "movie")
+	imdbID, err := tc.tmdbClient.GetImdbID(tmdbID, mediaType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), nil))
+		return
+	}
+
+	c.JSON(http.StatusOK, vo.Success(c, map[string]string{"imdb_id": imdbID}))
 }
 
 // getContentType determines the content type based on file extension

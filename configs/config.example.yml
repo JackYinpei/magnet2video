@@ -152,3 +152,9 @@ CLOUD_STORAGE:
   ENDPOINT: "https://s3.example.com"               # S3/Ceph 自定义端点
   ADDRESSING_STYLE: "path"                         # path 或 virtual
   SIGNATURE_VERSION: "v4"                          # v4 或 s3(v2)
+
+# ===========================================
+# TMDB API 配置 (可选)
+# ===========================================
+TMDB:
+  API_KEY: ""                                      # TMDB API Key (从 https://www.themoviedb.org/settings/api 获取)

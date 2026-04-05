@@ -44,4 +44,6 @@ type TorrentService interface {
 	SetPosterFromFile(c *gin.Context, req *dto.SetPosterRequest) (*vo.PosterResponse, error)
 	// UpdatePosterPath updates poster path directly (for uploads)
 	UpdatePosterPath(c *gin.Context, infoHash string, posterPath string) (*vo.PosterResponse, error)
+	// BindIMDB binds an IMDB ID to a torrent
+	BindIMDB(c *gin.Context, req *dto.BindIMDBRequest) (*vo.BindIMDBResponse, error)
 }

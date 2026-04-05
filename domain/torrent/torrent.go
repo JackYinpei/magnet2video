@@ -11,6 +11,7 @@ type Torrent struct {
 	TotalSize    int64
 	Files        []TorrentFile
 	PosterPath   string
+	ImdbID       string
 	DownloadPath string
 	Trackers     []string
 
@@ -108,6 +109,11 @@ func (t *Torrent) SetVisibility(v Visibility) error {
 // SetPoster sets the poster path/URL.
 func (t *Torrent) SetPoster(path string) {
 	t.PosterPath = path
+}
+
+// SetImdbID sets the IMDB ID.
+func (t *Torrent) SetImdbID(id string) {
+	t.ImdbID = id
 }
 
 // MarkLocalFilesDeleted marks local files as deleted.

@@ -304,6 +304,41 @@
         </main>
     </div>
 
+    <!-- IMDB 绑定弹窗 -->
+    <div id="imdb-modal" class="modal hidden">
+        <div class="modal-backdrop" id="imdb-modal-backdrop"></div>
+        <div class="modal-card imdb-modal-card">
+            <div class="modal-header">
+                <h3>绑定 IMDB</h3>
+                <button id="imdb-modal-close" class="btn btn-sm">关闭</button>
+            </div>
+            <div class="imdb-modal-body">
+                <div class="imdb-tabs">
+                    <button class="imdb-tab active" data-imdb-tab="manual">手动输入</button>
+                    <button class="imdb-tab" data-imdb-tab="search">搜索 TMDB</button>
+                </div>
+                <!-- 手动输入 Tab -->
+                <div id="imdb-tab-manual" class="imdb-tab-content active">
+                    <div class="form-group">
+                        <label>IMDB ID</label>
+                        <input type="text" id="imdb-manual-input" placeholder="tt1234567">
+                    </div>
+                    <button id="imdb-manual-bind-btn" class="btn btn-primary btn-sm">绑定</button>
+                </div>
+                <!-- 搜索 TMDB Tab -->
+                <div id="imdb-tab-search" class="imdb-tab-content">
+                    <div class="form-group">
+                        <div style="display:flex;gap:8px;">
+                            <input type="text" id="tmdb-search-input" placeholder="输入电影或剧集名称..." style="flex:1;">
+                            <button id="tmdb-search-btn" class="btn btn-primary btn-sm">搜索</button>
+                        </div>
+                    </div>
+                    <div id="tmdb-search-results" class="tmdb-results"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 海报预览 -->
     <div id="poster-modal" class="modal hidden">
         <div class="modal-backdrop" id="poster-modal-backdrop"></div>

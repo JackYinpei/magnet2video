@@ -17,6 +17,7 @@ import (
 	"github.com/Done-0/gin-scaffold/internal/queue"
 	"github.com/Done-0/gin-scaffold/internal/redis"
 	"github.com/Done-0/gin-scaffold/internal/sse"
+	"github.com/Done-0/gin-scaffold/internal/tmdb"
 	"github.com/Done-0/gin-scaffold/internal/torrent"
 	"github.com/Done-0/gin-scaffold/pkg/serve/controller"
 	"github.com/Done-0/gin-scaffold/pkg/serve/service"
@@ -27,7 +28,7 @@ import (
 
 // NewContainer initializes the complete application container using Wire
 func NewContainer(config *configs.Config) (*Container, error) {
-	v, err := ai.New(config)
+	manager, err := ai.New(config)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +41,7 @@ func NewContainer(config *configs.Config) (*Container, error) {
 		return nil, err
 	}
 	cacheManager := cache.New(redisManager, loggerManager)
-	v2 := cloud.New(config, loggerManager)
+	cloudStorageManager := cloud.New(config, loggerManager)
 	databaseManager := db.New(config)
 	i18nManager := i18n.New()
 	sseManager := sse.New(config)
@@ -52,10 +53,11 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	if err != nil {
 		return nil, err
 	}
-	testService := impl.NewTestService(loggerManager, redisManager, v)
+	tmdbClient := tmdb.New(config)
+	testService := impl.NewTestService(loggerManager, redisManager, manager)
 	testController := controller.NewTestController(testService, sseManager)
 	torrentServiceImpl := impl.NewTorrentService(loggerManager, databaseManager, torrentManager, cacheManager)
-	torrentController := controller.NewTorrentController(config, torrentServiceImpl, databaseManager, v2, producer)
+	torrentController := controller.NewTorrentController(config, torrentServiceImpl, databaseManager, cloudStorageManager, producer, tmdbClient)
 	userService := impl.NewUserService(loggerManager, databaseManager)
 	userController := controller.NewUserController(userService)
 	adminService := impl.NewAdminService(loggerManager, databaseManager, torrentManager)
@@ -63,9 +65,9 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	transcodeServiceImpl := impl.NewTranscodeService(config, loggerManager, databaseManager, torrentManager, producer)
 	container := &Container{
 		Config:              config,
-		AIManager:           v,
+		AIManager:           manager,
 		CacheManager:        cacheManager,
-		CloudStorageManager: v2,
+		CloudStorageManager: cloudStorageManager,
 		DatabaseManager:     databaseManager,
 		RedisManager:        redisManager,
 		LoggerManager:       loggerManager,
@@ -73,6 +75,7 @@ func NewContainer(config *configs.Config) (*Container, error) {
 		SSEManager:          sseManager,
 		TorrentManager:      torrentManager,
 		QueueProducer:       producer,
+		TMDBClient:          tmdbClient,
 		TestController:      testController,
 		TorrentController:   torrentController,
 		UserController:      userController,
@@ -100,6 +103,7 @@ type Container struct {
 	SSEManager          sse.SSEManager
 	TorrentManager      torrent.TorrentManager
 	QueueProducer       queue.Producer
+	TMDBClient          *tmdb.TMDBClient
 
 	// Controllers
 	TestController    *controller.TestController

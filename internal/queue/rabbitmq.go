@@ -272,6 +272,8 @@ func (c *RabbitMQConsumer) consumeMessages(topic string, msgs <-chan amqp.Delive
 					newMsgs, err := c.resubscribeTopic(topic)
 					if err != nil {
 						log.Printf("RabbitMQ resubscribe failed for topic %s: %v, retrying in %v...", topic, err, backoff)
+						// Invalidate connection so next reconnect() actually re-dials
+						c.invalidateConnection()
 						select {
 						case <-time.After(backoff):
 						case <-c.ctx.Done():
@@ -356,6 +358,20 @@ func (c *RabbitMQConsumer) reconnect() error {
 	c.conn = conn
 	c.channel = ch
 	return nil
+}
+
+// invalidateConnection forces the next reconnect() call to re-dial
+func (c *RabbitMQConsumer) invalidateConnection() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.channel != nil {
+		c.channel.Close()
+		c.channel = nil
+	}
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
 }
 
 // resubscribeTopic re-declares queue, binds it, and starts consuming
