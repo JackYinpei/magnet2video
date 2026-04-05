@@ -1715,7 +1715,7 @@ function renderAdminResources(torrents, total) {
             <td>${torrent.creator_nickname || '-'}</td>
             <td>${formatDate(torrent.created_at)}</td>
             <td class="actions">
-                ${torrent.transcode_status === 3 ? `<button class="btn btn-sm btn-warning" onclick="resetTranscode('${torrent.info_hash}')">重置转码</button>` : ''}
+                ${(torrent.transcode_status === 3 || torrent.transcode_status === 4 || torrent.transcode_status === 1) ? `<button class="btn btn-sm btn-warning" onclick="resetTranscode('${torrent.info_hash}')">重置转码</button>` : ''}
                 <button class="btn btn-sm btn-danger" onclick="deleteAdminTorrent('${torrent.info_hash}')">删除</button>
             </td>
         </tr>
