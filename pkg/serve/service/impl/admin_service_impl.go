@@ -395,43 +395,59 @@ func (as *AdminServiceImpl) ResetTranscode(c *gin.Context, infoHash string) (*vo
 		return nil, err
 	}
 
-	// Count and delete transcoded files
+	// Load all files from torrent_files table
+	var allFiles []torrentModel.TorrentFile
+	if err := as.dbManager.DB().Where("torrent_id = ?", torrentRecord.ID).Find(&allFiles).Error; err != nil {
+		as.loggerManager.Logger().Errorf("failed to load torrent files: %v", err)
+		return nil, err
+	}
+
+	// Delete derived files (transcoded/extracted) and reset original file transcode status
 	filesDeleted := 0
-	downloadDir := as.torrentManager.Client().GetDownloadDir()
+	var derivedIDs []int64
 
-	for i := range torrentRecord.Files {
-		if torrentRecord.Files[i].TranscodedPath != "" {
-			// Build full path to transcoded file
-			transcodedPath := torrentRecord.Files[i].TranscodedPath
-			fullPath := filepath.Join(downloadDir, transcodedPath)
-
-			// Try to delete the file
-			if err := os.Remove(fullPath); err != nil {
+	for _, f := range allFiles {
+		if f.Source == "transcoded" || f.Source == "extracted" {
+			// Delete the physical file
+			if err := os.Remove(f.Path); err != nil {
 				if !os.IsNotExist(err) {
-					as.loggerManager.Logger().Warnf("failed to delete transcoded file %s: %v", fullPath, err)
+					as.loggerManager.Logger().Warnf("failed to delete derived file %s: %v", f.Path, err)
 				}
 			} else {
 				filesDeleted++
-				as.loggerManager.Logger().Infof("Deleted transcoded file: %s", fullPath)
+				as.loggerManager.Logger().Infof("Deleted derived file: %s", f.Path)
 			}
-
-			// Reset file-level transcode status
-			torrentRecord.Files[i].TranscodeStatus = 0
-			torrentRecord.Files[i].TranscodedPath = ""
-			torrentRecord.Files[i].TranscodeError = ""
+			derivedIDs = append(derivedIDs, f.ID)
 		}
 	}
 
+	// Delete derived file records from torrent_files
+	if len(derivedIDs) > 0 {
+		if err := as.dbManager.DB().Where("id IN ?", derivedIDs).Delete(&torrentModel.TorrentFile{}).Error; err != nil {
+			as.loggerManager.Logger().Errorf("failed to delete derived file records: %v", err)
+			return nil, err
+		}
+	}
+
+	// Reset transcode status on original files
+	if err := as.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND (source = '' OR source = 'original')", torrentRecord.ID).
+		Updates(map[string]any{
+			"transcode_status": torrentModel.TranscodeStatusNone,
+			"transcoded_path":  "",
+			"transcode_error":  "",
+		}).Error; err != nil {
+		as.loggerManager.Logger().Errorf("failed to reset file transcode status: %v", err)
+		return nil, err
+	}
+
 	// Reset torrent-level transcode status
-	updates := map[string]any{
-		"transcode_status":   0,
+	if err := as.dbManager.DB().Model(&torrentRecord).Updates(map[string]any{
+		"transcode_status":   torrentModel.TranscodeStatusNone,
 		"transcode_progress": 0,
 		"transcoded_count":   0,
 		"total_transcode":    0,
-		"files":              torrentRecord.Files,
-	}
-
-	if err := as.dbManager.DB().Model(&torrentRecord).Updates(updates).Error; err != nil {
+	}).Error; err != nil {
 		as.loggerManager.Logger().Errorf("failed to reset transcode status: %v", err)
 		return nil, err
 	}
