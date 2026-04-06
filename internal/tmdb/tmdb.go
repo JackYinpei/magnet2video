@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 const (

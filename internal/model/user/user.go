@@ -3,7 +3,7 @@
 // Created: 2025-09-25
 package user
 
-import "github.com/Done-0/gin-scaffold/internal/model/base"
+import "magnet2video/internal/model/base"
 
 // User represents user model
 type User struct {

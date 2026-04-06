@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	domain "github.com/Done-0/gin-scaffold/domain/transcode"
+	domain "magnet2video/domain/transcode"
 )
 
 func newTestTranscodeRepo(t *testing.T) *GormTranscodeJobRepository {

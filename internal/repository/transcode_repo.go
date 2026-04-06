@@ -8,10 +8,10 @@ import (
 
 	"gorm.io/gorm"
 
-	domain "github.com/Done-0/gin-scaffold/domain/transcode"
-	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
-	"github.com/Done-0/gin-scaffold/internal/db"
-	"github.com/Done-0/gin-scaffold/internal/repository/mapper"
+	domain "magnet2video/domain/transcode"
+	transcodeModel "magnet2video/internal/model/transcode"
+	"magnet2video/internal/db"
+	"magnet2video/internal/repository/mapper"
 )
 
 // GormTranscodeJobRepository implements domain.JobRepository using GORM.

@@ -6,9 +6,9 @@ package cloud
 import (
 	"strings"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/cloud/internal"
-	"github.com/Done-0/gin-scaffold/internal/logger"
+	"magnet2video/configs"
+	"magnet2video/internal/cloud/internal"
+	"magnet2video/internal/logger"
 )
 
 // CloudStorageManager defines cloud storage operations interface

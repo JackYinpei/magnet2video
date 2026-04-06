@@ -6,9 +6,9 @@ package model
 import (
 	"testing"
 
-	"github.com/Done-0/gin-scaffold/internal/model/torrent"
-	"github.com/Done-0/gin-scaffold/internal/model/transcode"
-	"github.com/Done-0/gin-scaffold/internal/model/user"
+	"magnet2video/internal/model/torrent"
+	"magnet2video/internal/model/transcode"
+	"magnet2video/internal/model/user"
 )
 
 func TestGetAllModels(t *testing.T) {

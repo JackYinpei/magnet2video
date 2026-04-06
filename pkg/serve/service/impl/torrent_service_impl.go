@@ -16,16 +16,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
-	"github.com/Done-0/gin-scaffold/internal/cache"
-	"github.com/Done-0/gin-scaffold/internal/db"
-	"github.com/Done-0/gin-scaffold/internal/logger"
-	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
-	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
-	"github.com/Done-0/gin-scaffold/internal/torrent"
-	"github.com/Done-0/gin-scaffold/internal/types/consts"
-	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
-	"github.com/Done-0/gin-scaffold/pkg/serve/service"
-	"github.com/Done-0/gin-scaffold/pkg/vo"
+	"magnet2video/internal/cache"
+	"magnet2video/internal/db"
+	"magnet2video/internal/logger"
+	"magnet2video/internal/middleware/auth"
+	torrentModel "magnet2video/internal/model/torrent"
+	"magnet2video/internal/torrent"
+	"magnet2video/internal/types/consts"
+	"magnet2video/pkg/serve/controller/dto"
+	"magnet2video/pkg/serve/service"
+	"magnet2video/pkg/vo"
 )
 
 // TorrentServiceImpl torrent service implementation

@@ -4,9 +4,9 @@
 package internal
 
 import (
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/ai/internal/prompter"
-	"github.com/Done-0/gin-scaffold/internal/ai/internal/provider"
+	"magnet2video/configs"
+	"magnet2video/internal/ai/internal/prompter"
+	"magnet2video/internal/ai/internal/provider"
 )
 
 type Manager struct {

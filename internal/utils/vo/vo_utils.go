@@ -11,9 +11,9 @@ import (
 	"github.com/gin-contrib/requestid"
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/internal/types/errno"
-	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
-	"github.com/Done-0/gin-scaffold/internal/utils/i18n"
+	"magnet2video/internal/types/errno"
+	"magnet2video/internal/utils/errorx"
+	"magnet2video/internal/utils/i18n"
 )
 
 // Error information

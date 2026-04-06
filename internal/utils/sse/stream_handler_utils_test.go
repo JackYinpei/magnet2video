@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	internalsse "github.com/Done-0/gin-scaffold/internal/sse"
+	internalsse "magnet2video/internal/sse"
 )
 
 type mockManager struct {

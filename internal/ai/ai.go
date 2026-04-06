@@ -4,9 +4,9 @@
 package ai
 
 import (
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/ai/internal"
-	"github.com/Done-0/gin-scaffold/internal/ai/internal/provider"
+	"magnet2video/configs"
+	"magnet2video/internal/ai/internal"
+	"magnet2video/internal/ai/internal/provider"
 )
 
 type (

@@ -15,9 +15,9 @@ import (
 	"github.com/sashabaranov/go-openai"
 	"golang.org/x/time/rate"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 
-	rateUtil "github.com/Done-0/gin-scaffold/internal/utils/rate"
+	rateUtil "magnet2video/internal/utils/rate"
 )
 
 type openAIProvider struct {

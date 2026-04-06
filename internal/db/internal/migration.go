@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Done-0/gin-scaffold/internal/model"
+	"magnet2video/internal/model"
 )
 
 // migrate performs database auto migration

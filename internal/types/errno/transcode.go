@@ -4,7 +4,7 @@
 package errno
 
 import (
-	"github.com/Done-0/gin-scaffold/internal/utils/errorx/code"
+	"magnet2video/internal/utils/errorx/code"
 )
 
 // Transcode-level error codes: 50000 ~ 59999

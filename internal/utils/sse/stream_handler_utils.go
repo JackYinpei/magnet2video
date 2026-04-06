@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/internal/sse"
+	"magnet2video/internal/sse"
 )
 
 type Handler func(ctx context.Context, ch chan<- *sse.Event)

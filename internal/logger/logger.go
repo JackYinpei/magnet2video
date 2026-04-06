@@ -6,8 +6,8 @@ package logger
 import (
 	"github.com/sirupsen/logrus"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/logger/internal"
+	"magnet2video/configs"
+	"magnet2video/internal/logger/internal"
 )
 
 // LoggerManager defines the interface for logger management operations

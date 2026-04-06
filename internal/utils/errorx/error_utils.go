@@ -4,7 +4,7 @@
 package errorx
 
 import (
-	"github.com/Done-0/gin-scaffold/internal/utils/errorx/internal"
+	"magnet2video/internal/utils/errorx/internal"
 )
 
 // StatusError error interface with status code

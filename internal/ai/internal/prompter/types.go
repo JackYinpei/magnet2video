@@ -6,7 +6,7 @@ package prompter
 import (
 	"context"
 
-	"github.com/Done-0/gin-scaffold/internal/utils/template"
+	"magnet2video/internal/utils/template"
 )
 
 type Prompter interface {

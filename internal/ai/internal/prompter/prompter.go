@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/utils/file"
-	"github.com/Done-0/gin-scaffold/internal/utils/template"
+	"magnet2video/configs"
+	"magnet2video/internal/utils/file"
+	"magnet2video/internal/utils/template"
 )
 
 type prompter struct{}

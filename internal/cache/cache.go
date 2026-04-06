@@ -11,8 +11,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/Done-0/gin-scaffold/internal/logger"
-	redisManager "github.com/Done-0/gin-scaffold/internal/redis"
+	"magnet2video/internal/logger"
+	redisManager "magnet2video/internal/redis"
 )
 
 // CacheManager，缓存操作接口，定义了所有缓存相关的方法

@@ -6,7 +6,7 @@ package code
 import (
 	"testing"
 
-	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
+	"magnet2video/internal/utils/errorx"
 )
 
 func TestRegister(t *testing.T) {

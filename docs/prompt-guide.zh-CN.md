@@ -223,7 +223,7 @@ package main
 import (
     "context"
 
-    "github.com/Done-0/gin-scaffold/internal/ai/internal/prompt"
+    "magnet2video/internal/ai/internal/prompt"
 )
 
 func main() {

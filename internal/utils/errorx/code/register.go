@@ -4,7 +4,7 @@
 package code
 
 import (
-	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
+	"magnet2video/internal/utils/errorx"
 )
 
 // RegisterOptionFn registration option function type

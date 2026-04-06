@@ -9,7 +9,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/Done-0/gin-scaffold/internal/model"
+	"magnet2video/internal/model"
 )
 
 // mockDBManager wraps a real GORM DB backed by SQLite in-memory for testing

@@ -4,7 +4,7 @@
 package torrent
 
 import (
-	"github.com/Done-0/gin-scaffold/internal/model/base"
+	"magnet2video/internal/model/base"
 )
 
 // TorrentFile represents a single file in a torrent

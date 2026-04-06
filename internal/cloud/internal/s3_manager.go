@@ -20,8 +20,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/logger"
+	"magnet2video/configs"
+	"magnet2video/internal/logger"
 )
 
 // Multipart upload threshold: files larger than 100MB use multipart upload

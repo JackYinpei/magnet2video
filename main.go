@@ -4,7 +4,7 @@
 package main
 
 import (
-	"github.com/Done-0/gin-scaffold/cmd"
+	"magnet2video/cmd"
 )
 
 func main() {

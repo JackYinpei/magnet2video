@@ -9,7 +9,7 @@ import (
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 type Manager struct{}

@@ -6,7 +6,7 @@ package i18n
 import (
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 
-	"github.com/Done-0/gin-scaffold/internal/i18n/internal"
+	"magnet2video/internal/i18n/internal"
 )
 
 // I18nManager defines the interface for i18n management

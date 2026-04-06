@@ -12,7 +12,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 // RabbitMQProducer sends messages to RabbitMQ

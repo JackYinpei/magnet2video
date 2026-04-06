@@ -8,13 +8,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/internal/sse"
-	"github.com/Done-0/gin-scaffold/internal/types/errno"
-	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
-	"github.com/Done-0/gin-scaffold/internal/utils/validator"
-	"github.com/Done-0/gin-scaffold/internal/utils/vo"
-	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
-	"github.com/Done-0/gin-scaffold/pkg/serve/service"
+	"magnet2video/internal/sse"
+	"magnet2video/internal/types/errno"
+	"magnet2video/internal/utils/errorx"
+	"magnet2video/internal/utils/validator"
+	"magnet2video/internal/utils/vo"
+	"magnet2video/pkg/serve/controller/dto"
+	"magnet2video/pkg/serve/service"
 )
 
 // TestController test HTTP controller

@@ -4,8 +4,8 @@
 package torrent
 
 import (
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/torrent/internal"
+	"magnet2video/configs"
+	"magnet2video/internal/torrent/internal"
 )
 
 // TorrentManager defines the interface for torrent management operations

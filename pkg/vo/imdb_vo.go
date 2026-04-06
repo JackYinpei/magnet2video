@@ -3,7 +3,7 @@
 // Created: 2026-03-19
 package vo
 
-import "github.com/Done-0/gin-scaffold/internal/tmdb"
+import "magnet2video/internal/tmdb"
 
 // BindIMDBResponse response for binding IMDB ID to a torrent
 type BindIMDBResponse struct {

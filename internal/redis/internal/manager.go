@@ -12,7 +12,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 // Manager represents a Redis manager with dependency injection

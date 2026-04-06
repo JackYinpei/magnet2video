@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
+	torrentModel "magnet2video/internal/model/torrent"
 )
 
 // setupTorrentServiceDirect creates a TorrentServiceImpl without calling the constructor

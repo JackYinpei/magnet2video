@@ -16,8 +16,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 
-	"github.com/Done-0/gin-scaffold/internal/cache"
-	"github.com/Done-0/gin-scaffold/internal/model"
+	"magnet2video/internal/cache"
+	"magnet2video/internal/model"
 )
 
 // --- MockLoggerManager ---

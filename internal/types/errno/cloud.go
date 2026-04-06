@@ -3,7 +3,7 @@
 // Created: 2026-02-01
 package errno
 
-import "github.com/Done-0/gin-scaffold/internal/utils/errorx"
+import "magnet2video/internal/utils/errorx"
 
 func init() {
 	// Cloud Storage errors (20400-20499)

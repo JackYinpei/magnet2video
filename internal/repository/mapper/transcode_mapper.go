@@ -4,8 +4,8 @@
 package mapper
 
 import (
-	domain "github.com/Done-0/gin-scaffold/domain/transcode"
-	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
+	domain "magnet2video/domain/transcode"
+	transcodeModel "magnet2video/internal/model/transcode"
 )
 
 // JobToDomain converts a GORM TranscodeJob to a domain Job.

@@ -4,8 +4,8 @@
 package mapper
 
 import (
-	domain "github.com/Done-0/gin-scaffold/domain/user"
-	userModel "github.com/Done-0/gin-scaffold/internal/model/user"
+	domain "magnet2video/domain/user"
+	userModel "magnet2video/internal/model/user"
 )
 
 // UserToDomain converts a GORM User model to a domain User.

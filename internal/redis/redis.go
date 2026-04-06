@@ -6,8 +6,8 @@ package redis
 import (
 	"github.com/redis/go-redis/v9"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/redis/internal"
+	"magnet2video/configs"
+	"magnet2video/internal/redis/internal"
 )
 
 // RedisManager defines the interface for Redis management operations

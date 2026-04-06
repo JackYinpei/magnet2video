@@ -18,7 +18,7 @@ import (
 	"github.com/anacrolix/torrent/storage"
 	"golang.org/x/time/rate"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 // DefaultTrackers are used when user doesn't provide custom trackers

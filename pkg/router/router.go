@@ -6,8 +6,8 @@ package router
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/pkg/router/routes"
-	"github.com/Done-0/gin-scaffold/pkg/wire"
+	"magnet2video/pkg/router/routes"
+	"magnet2video/pkg/wire"
 )
 
 // New registers application routes

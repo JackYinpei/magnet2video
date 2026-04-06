@@ -7,8 +7,8 @@ import (
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
-	"github.com/Done-0/gin-scaffold/pkg/vo"
+	"magnet2video/pkg/serve/controller/dto"
+	"magnet2video/pkg/vo"
 )
 
 // TestService test service interface

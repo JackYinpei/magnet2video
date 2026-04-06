@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 // Producer defines the interface for message production

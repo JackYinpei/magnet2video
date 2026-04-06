@@ -4,9 +4,9 @@
 package model
 
 import (
-	"github.com/Done-0/gin-scaffold/internal/model/torrent"
-	"github.com/Done-0/gin-scaffold/internal/model/transcode"
-	"github.com/Done-0/gin-scaffold/internal/model/user"
+	"magnet2video/internal/model/torrent"
+	"magnet2video/internal/model/transcode"
+	"magnet2video/internal/model/user"
 )
 
 // GetAllModels gets and registers all models for database migration

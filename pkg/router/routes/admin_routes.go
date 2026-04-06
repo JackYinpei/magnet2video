@@ -6,8 +6,8 @@ package routes
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
-	"github.com/Done-0/gin-scaffold/pkg/wire"
+	"magnet2video/internal/middleware/auth"
+	"magnet2video/pkg/wire"
 )
 
 // RegisterAdminRoutes registers admin module routes

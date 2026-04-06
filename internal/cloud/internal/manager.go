@@ -12,8 +12,8 @@ import (
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/logger"
+	"magnet2video/configs"
+	"magnet2video/internal/logger"
 )
 
 // CloudStorageManager defines cloud storage operations interface

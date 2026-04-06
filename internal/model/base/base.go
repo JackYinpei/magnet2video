@@ -11,7 +11,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/Done-0/gin-scaffold/internal/utils/snowflake"
+	"magnet2video/internal/utils/snowflake"
 )
 
 // Base contains common model fields

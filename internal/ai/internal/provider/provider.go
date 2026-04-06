@@ -9,7 +9,7 @@ import (
 	"log"
 	"sync/atomic"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 type provider struct {

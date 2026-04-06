@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 
-	"github.com/Done-0/gin-scaffold/internal/types/consts"
+	"magnet2video/internal/types/consts"
 )
 
 // T translates a message key with template parameters

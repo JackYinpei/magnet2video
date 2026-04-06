@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/Done-0/gin-scaffold/internal/model/base"
+	"magnet2video/internal/model/base"
 )
 
 // Torrent represents a torrent download record

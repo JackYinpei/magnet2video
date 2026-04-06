@@ -10,15 +10,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"github.com/Done-0/gin-scaffold/internal/db"
-	"github.com/Done-0/gin-scaffold/internal/logger"
-	"github.com/Done-0/gin-scaffold/internal/middleware/auth"
-	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
-	userModel "github.com/Done-0/gin-scaffold/internal/model/user"
-	"github.com/Done-0/gin-scaffold/internal/utils/jwt"
-	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
-	"github.com/Done-0/gin-scaffold/pkg/serve/service"
-	"github.com/Done-0/gin-scaffold/pkg/vo"
+	"magnet2video/internal/db"
+	"magnet2video/internal/logger"
+	"magnet2video/internal/middleware/auth"
+	torrentModel "magnet2video/internal/model/torrent"
+	userModel "magnet2video/internal/model/user"
+	"magnet2video/internal/utils/jwt"
+	"magnet2video/pkg/serve/controller/dto"
+	"magnet2video/pkg/serve/service"
+	"magnet2video/pkg/vo"
 )
 
 // UserServiceImpl user service implementation

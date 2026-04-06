@@ -50,7 +50,7 @@
    {
      "data": {
        "version": "1.0.0",
-       "message": "Hello, gin-scaffold! 🎉!"
+       "message": "Hello, magnet2video! 🎉!"
      },
      "requestId": "b42eb8af-b48d-48cd-8c15-f3cd52860d11",
      "timeStamp": 1758822421

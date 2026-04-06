@@ -11,7 +11,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 func TestPrompt(t *testing.T) {

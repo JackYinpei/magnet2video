@@ -10,13 +10,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/cloud"
-	cloudTypes "github.com/Done-0/gin-scaffold/internal/cloud/types"
-	"github.com/Done-0/gin-scaffold/internal/db"
-	"github.com/Done-0/gin-scaffold/internal/logger"
-	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
-	"github.com/Done-0/gin-scaffold/internal/queue"
+	"magnet2video/configs"
+	"magnet2video/internal/cloud"
+	cloudTypes "magnet2video/internal/cloud/types"
+	"magnet2video/internal/db"
+	"magnet2video/internal/logger"
+	torrentModel "magnet2video/internal/model/torrent"
+	"magnet2video/internal/queue"
 )
 
 // CloudUploadHandler handles cloud upload job messages

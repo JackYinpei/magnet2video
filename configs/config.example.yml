@@ -4,7 +4,7 @@
 # ===========================================
 
 APP:
-  APP_NAME: "gin-scaffold"
+  APP_NAME: "magnet2video"
   # CORS 跨域相关
   CORS:
     ALLOW_ORIGINS: ["*"] # 允许的源，生产环境应指定具体域名，如 ["https://yourdomain.com"]

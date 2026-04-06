@@ -7,8 +7,8 @@ import (
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/sse/internal"
+	"magnet2video/configs"
+	"magnet2video/internal/sse/internal"
 )
 
 // SSEManager defines SSE operations

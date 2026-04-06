@@ -8,10 +8,10 @@ import (
 
 	"gorm.io/gorm"
 
-	domain "github.com/Done-0/gin-scaffold/domain/user"
-	"github.com/Done-0/gin-scaffold/internal/db"
-	userModel "github.com/Done-0/gin-scaffold/internal/model/user"
-	"github.com/Done-0/gin-scaffold/internal/repository/mapper"
+	domain "magnet2video/domain/user"
+	"magnet2video/internal/db"
+	userModel "magnet2video/internal/model/user"
+	"magnet2video/internal/repository/mapper"
 )
 
 // GormUserRepository implements domain.UserRepository using GORM.

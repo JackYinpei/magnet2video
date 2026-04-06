@@ -118,7 +118,7 @@ Go 语言支持 C 风格的注释语法，包括 `/**/` 和 `//`。
 
 ```go
 // Package biz_err 提供业务错误码和错误信息定义
-// 创建者：Done-0
+// 创建者：magnet2video
 // 创建时间：2025-07-01
 ```
 
@@ -257,8 +257,8 @@ import (
 
     "github.com/gin-gonic/gin"
 
-    "github.com/Done-0/gin-scaffold/internal/global"
-    "github.com/Done-0/gin-scaffold/pkg/vo"
+    "magnet2video/internal/global"
+    "magnet2video/pkg/vo"
 
     _ "github.com/go-sql-driver/mysql" // 匿名导入
     customname "github.com/pkg/errors" // 别名导入
@@ -280,10 +280,10 @@ import "github.com/repo/proj/src/net"
 
 ```go
 // 错误示例
-import "github.com/Done-0/gin-scaffold/gin-scaffold/internal/model/account" // 此文件的实际包名为 model
+import "magnet2video/magnet2video/internal/model/account" // 此文件的实际包名为 model
 
 // 正确示例
-import model "github.com/Done-0/gin-scaffold/gin-scaffold/internal/model/account" // 使用 model 别名
+import model "magnet2video/magnet2video/internal/model/account" // 使用 model 别名
 ```
 
 ### 5. 错误处理

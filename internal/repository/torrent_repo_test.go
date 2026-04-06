@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	domain "github.com/Done-0/gin-scaffold/domain/torrent"
-	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
+	domain "magnet2video/domain/torrent"
+	torrentModel "magnet2video/internal/model/torrent"
 )
 
 func newTestTorrentRepo(t *testing.T) (*GormTorrentRepository, *mockDBManager) {

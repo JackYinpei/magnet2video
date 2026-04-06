@@ -11,7 +11,7 @@ import (
 
 	"gopkg.in/gomail.v2"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 )
 
 // Email server configuration

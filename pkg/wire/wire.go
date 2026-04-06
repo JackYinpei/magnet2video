@@ -8,21 +8,21 @@ package wire
 import (
 	"github.com/google/wire"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/ai"
-	"github.com/Done-0/gin-scaffold/internal/cache"
-	"github.com/Done-0/gin-scaffold/internal/cloud"
-	"github.com/Done-0/gin-scaffold/internal/db"
-	"github.com/Done-0/gin-scaffold/internal/i18n"
-	"github.com/Done-0/gin-scaffold/internal/logger"
-	"github.com/Done-0/gin-scaffold/internal/queue"
-	"github.com/Done-0/gin-scaffold/internal/sse"
-	"github.com/Done-0/gin-scaffold/internal/tmdb"
-	"github.com/Done-0/gin-scaffold/internal/torrent"
+	"magnet2video/configs"
+	"magnet2video/internal/ai"
+	"magnet2video/internal/cache"
+	"magnet2video/internal/cloud"
+	"magnet2video/internal/db"
+	"magnet2video/internal/i18n"
+	"magnet2video/internal/logger"
+	"magnet2video/internal/queue"
+	"magnet2video/internal/sse"
+	"magnet2video/internal/tmdb"
+	"magnet2video/internal/torrent"
 
-	"github.com/Done-0/gin-scaffold/internal/redis"
-	"github.com/Done-0/gin-scaffold/pkg/serve/controller"
-	"github.com/Done-0/gin-scaffold/pkg/serve/service"
+	"magnet2video/internal/redis"
+	"magnet2video/pkg/serve/controller"
+	"magnet2video/pkg/serve/service"
 )
 
 // Container holds all application dependencies

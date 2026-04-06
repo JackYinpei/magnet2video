@@ -3,7 +3,7 @@
 // Created: 2026-01-26
 package transcode
 
-import "github.com/Done-0/gin-scaffold/internal/model/base"
+import "magnet2video/internal/model/base"
 
 // TranscodeJob represents a video transcoding job
 type TranscodeJob struct {

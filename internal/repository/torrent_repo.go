@@ -8,10 +8,10 @@ import (
 
 	"gorm.io/gorm"
 
-	domain "github.com/Done-0/gin-scaffold/domain/torrent"
-	"github.com/Done-0/gin-scaffold/internal/db"
-	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
-	"github.com/Done-0/gin-scaffold/internal/repository/mapper"
+	domain "magnet2video/domain/torrent"
+	"magnet2video/internal/db"
+	torrentModel "magnet2video/internal/model/torrent"
+	"magnet2video/internal/repository/mapper"
 )
 
 // GormTorrentRepository implements domain.TorrentRepository using GORM.

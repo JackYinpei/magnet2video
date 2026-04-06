@@ -9,10 +9,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/internal/types/errno"
-	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
-	"github.com/Done-0/gin-scaffold/internal/utils/jwt"
-	"github.com/Done-0/gin-scaffold/internal/utils/vo"
+	"magnet2video/internal/types/errno"
+	"magnet2video/internal/utils/errorx"
+	"magnet2video/internal/utils/jwt"
+	"magnet2video/internal/utils/vo"
 )
 
 const (

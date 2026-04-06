@@ -118,7 +118,7 @@ Go supports C-style comments: `/**/` and `//`.
 
 ```go
 // Package biz_err provides business error codes and messages.
-// Creator: Done-0
+// Creator: magnet2video
 // Created: 2025-07-01
 ```
 
@@ -255,8 +255,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/internal/global"
-	"github.com/Done-0/gin-scaffold/pkg/vo"
+	"magnet2video/internal/global"
+	"magnet2video/pkg/vo"
 
     _ "github.com/go-sql-driver/mysql"   // Blank import (third-party)
 	customname "github.com/pkg/errors"   // Aliased import (third-party)
@@ -278,10 +278,10 @@ import "github.com/repo/proj/src/net"
 
 ```go
 // Incorrect
-import "github.com/Done-0/gin-scaffold/gin-scaffold/internal/model/account" // The actual package name is `model`.
+import "magnet2video/magnet2video/internal/model/account" // The actual package name is `model`.
 
 // Correct
-import model "github.com/Done-0/gin-scaffold/gin-scaffold/internal/model/account" // Use `model` as an alias.
+import model "magnet2video/magnet2video/internal/model/account" // Use `model` as an alias.
 ```
 
 ### 3.5. Error Handling

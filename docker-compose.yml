@@ -53,7 +53,7 @@ services:
       - .docker.env
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
-      MYSQL_DATABASE: ${DB_NAME:-gin-scaffold_db}
+      MYSQL_DATABASE: ${DB_NAME:-magnet2video_db}
     ports:
       - "${DB_PORT:-3306}:3306"
     volumes:

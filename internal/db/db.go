@@ -6,8 +6,8 @@ package db
 import (
 	"gorm.io/gorm"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/db/internal"
+	"magnet2video/configs"
+	"magnet2video/internal/db/internal"
 )
 
 // DatabaseManager defines the interface for database management operations

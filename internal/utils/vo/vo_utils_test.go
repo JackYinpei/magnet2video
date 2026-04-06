@@ -12,8 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/Done-0/gin-scaffold/internal/types/errno"
-	"github.com/Done-0/gin-scaffold/internal/utils/errorx"
+	"magnet2video/internal/types/errno"
+	"magnet2video/internal/utils/errorx"
 )
 
 func init() {

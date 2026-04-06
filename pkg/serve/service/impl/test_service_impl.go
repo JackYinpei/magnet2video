@@ -13,13 +13,13 @@ import (
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/internal/ai"
-	"github.com/Done-0/gin-scaffold/internal/logger"
-	"github.com/Done-0/gin-scaffold/internal/redis"
-	"github.com/Done-0/gin-scaffold/internal/types/errno"
-	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
-	"github.com/Done-0/gin-scaffold/pkg/serve/service"
-	"github.com/Done-0/gin-scaffold/pkg/vo"
+	"magnet2video/internal/ai"
+	"magnet2video/internal/logger"
+	"magnet2video/internal/redis"
+	"magnet2video/internal/types/errno"
+	"magnet2video/pkg/serve/controller/dto"
+	"magnet2video/pkg/serve/service"
+	"magnet2video/pkg/vo"
 )
 
 // TestServiceImpl test service implementation

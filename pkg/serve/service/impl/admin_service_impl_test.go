@@ -8,10 +8,10 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
-	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
-	userModel "github.com/Done-0/gin-scaffold/internal/model/user"
-	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
+	torrentModel "magnet2video/internal/model/torrent"
+	transcodeModel "magnet2video/internal/model/transcode"
+	userModel "magnet2video/internal/model/user"
+	"magnet2video/pkg/serve/controller/dto"
 )
 
 // setupAdminServiceDirect creates an AdminServiceImpl without TorrentManager

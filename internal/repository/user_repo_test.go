@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	domain "github.com/Done-0/gin-scaffold/domain/user"
+	domain "magnet2video/domain/user"
 )
 
 func newTestUserRepo(t *testing.T) *GormUserRepository {

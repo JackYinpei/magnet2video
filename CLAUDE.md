@@ -935,7 +935,7 @@ CLOUD_STORAGE:
 ### 访问配置
 
 ```go
-import "github.com/Done-0/gin-scaffold/internal/configs"
+import "magnet2video/internal/configs"
 
 config := configs.GetConfig()
 port := config.APP.APP_PORT
@@ -1027,7 +1027,7 @@ return errorx.New(20002, errorx.KV("field", "email")) // "invalid {field}"
 #### 包注释
 ```go
 // Package torrent provides BT download management.
-// Creator: Done-0
+// Creator: magnet2video
 // Created: 2025-01-20
 ```
 
@@ -1064,8 +1064,8 @@ import (
 
     "github.com/gin-gonic/gin"
 
-    "github.com/Done-0/gin-scaffold/internal/logger"
-    "github.com/Done-0/gin-scaffold/pkg/vo"
+    "magnet2video/internal/logger"
+    "magnet2video/pkg/vo"
 )
 ```
 
@@ -1211,7 +1211,7 @@ cd pkg/wire && wire
 ### 使用 Redis 缓存
 
 ```go
-import "github.com/Done-0/gin-scaffold/internal/cache"
+import "magnet2video/internal/cache"
 
 // 直接操作 Redis
 rdb := container.RedisManager.GetClient()
@@ -1366,4 +1366,4 @@ docker-compose down
 ---
 
 **最后更新**: 2026-02-14
-**维护者**: Done-0
+**维护者**: magnet2video

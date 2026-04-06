@@ -6,10 +6,10 @@ package impl
 import (
 	"testing"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	torrentModel "github.com/Done-0/gin-scaffold/internal/model/torrent"
-	transcodeModel "github.com/Done-0/gin-scaffold/internal/model/transcode"
-	"github.com/Done-0/gin-scaffold/pkg/serve/controller/dto"
+	"magnet2video/configs"
+	torrentModel "magnet2video/internal/model/torrent"
+	transcodeModel "magnet2video/internal/model/transcode"
+	"magnet2video/pkg/serve/controller/dto"
 )
 
 // setupTranscodeServiceDirect creates a TranscodeServiceImpl without calling the constructor

@@ -7,8 +7,8 @@ import (
 	"github.com/gin-contrib/requestid"
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/configs"
-	"github.com/Done-0/gin-scaffold/internal/middleware/cors"
+	"magnet2video/configs"
+	"magnet2video/internal/middleware/cors"
 )
 
 // New registers all middleware to the Gin engine

@@ -14,7 +14,7 @@ import (
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 	"golang.org/x/text/language"
 
-	"github.com/Done-0/gin-scaffold/internal/types/consts"
+	"magnet2video/internal/types/consts"
 )
 
 // Manager provides i18n functionality

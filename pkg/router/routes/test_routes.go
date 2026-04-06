@@ -6,7 +6,7 @@ package routes
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/Done-0/gin-scaffold/pkg/wire"
+	"magnet2video/pkg/wire"
 )
 
 // RegisterTestRoutes registers test module routes

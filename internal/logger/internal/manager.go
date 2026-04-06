@@ -14,7 +14,7 @@ import (
 	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
 
-	"github.com/Done-0/gin-scaffold/configs"
+	"magnet2video/configs"
 
 	rotateLogs "github.com/lestrrat-go/file-rotatelogs"
 )

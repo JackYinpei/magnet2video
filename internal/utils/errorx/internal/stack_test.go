@@ -21,7 +21,7 @@ func TestStack(t *testing.T) {
 
 func TestTrimPathPrefix(t *testing.T) {
 	cases := map[string]string{
-		"github.com/Done-0/gin-scaffold/internal/utils/errorx/internal.stack": "stack",
+		"magnet2video/internal/utils/errorx/internal.stack": "stack",
 		"main.main": "main",
 		"stack": "stack",
 	}
