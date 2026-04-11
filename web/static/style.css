@@ -1909,3 +1909,22 @@ video::cue {
 .imdb-badge:hover {
     background: rgba(245, 197, 24, 0.25);
 }
+
+/* Footer */
+.site-footer {
+    text-align: center;
+    padding: 24px 16px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--border);
+}
+
+.site-footer a {
+    color: var(--amber);
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.site-footer a:hover {
+    color: var(--amber-light);
+}
