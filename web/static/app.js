@@ -2250,6 +2250,61 @@ async function init() {
     } else {
         navigateTo('public');
     }
+
+    // Worker 状态:首次刷新 + 每 15 秒轮询一次
+    fetchWorkerStatus();
+    setInterval(fetchWorkerStatus, 15000);
+}
+
+// ============ Worker 状态条 ============
+// 轮询 /api/v1/worker/status,在页面顶部显示当前 worker 在线情况。
+// 无 worker / 全部离线时显示红色警告。有任务排队时提示用户。
+async function fetchWorkerStatus() {
+    const banner = document.getElementById('worker-status-banner');
+    if (!banner) return;
+    try {
+        const res = await fetch(`${API_BASE}/worker/status`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = await res.json();
+        const workers = (body && body.data && body.data.workers) || [];
+        renderWorkerStatus(banner, workers);
+    } catch (err) {
+        // 静默失败,不打扰用户 (worker status 属于辅助功能)。
+        banner.classList.add('hidden');
+    }
+}
+
+function renderWorkerStatus(banner, workers) {
+    // 在单体 (mode=all) 部署里 worker 就是本机,如果没有任何心跳就隐藏。
+    if (!workers || workers.length === 0) {
+        banner.classList.add('hidden');
+        return;
+    }
+    const online = workers.filter(w => w.online);
+    const offline = workers.filter(w => !w.online);
+
+    banner.classList.remove('hidden');
+    banner.classList.toggle('worker-banner-offline', online.length === 0);
+    banner.classList.toggle('worker-banner-online', online.length > 0);
+
+    let html = '';
+    if (online.length > 0) {
+        const jobs = online.flatMap(w => w.current_jobs || []);
+        const jobSummary = jobs.length > 0
+            ? ` · 正在处理 ${jobs.length} 个任务`
+            : ' · 空闲';
+        const diskParts = online
+            .filter(w => w.disk_free_gb > 0)
+            .map(w => `${w.worker_id}:${w.disk_free_gb}GB可用`);
+        const diskSummary = diskParts.length > 0 ? ` · 磁盘 ${diskParts.join(', ')}` : '';
+        html += `<span class="worker-dot online"></span>Worker 在线 (${online.length})${jobSummary}${diskSummary}`;
+    }
+    if (offline.length > 0) {
+        html += online.length > 0 ? ' · ' : '';
+        html += `<span class="worker-dot offline"></span>离线 ${offline.map(w => w.worker_id).join(', ')}`;
+        html += online.length === 0 ? ' — 下载/转码已暂停,请检查本地机器' : '';
+    }
+    banner.innerHTML = html;
 }
 
 // 启动应用

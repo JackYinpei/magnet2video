@@ -1,0 +1,642 @@
+// Package processor consumes worker events on the server side and applies them
+// to the database, queueing follow-up jobs (e.g. cloud uploads) as needed.
+// Author: magnet2video
+// Created: 2026-04-20
+package processor
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"gorm.io/gorm"
+
+	"magnet2video/configs"
+	cloudTypes "magnet2video/internal/cloud/types"
+	"magnet2video/internal/db"
+	eventTypes "magnet2video/internal/events/types"
+	"magnet2video/internal/logger"
+	torrentModel "magnet2video/internal/model/torrent"
+	transcodeModel "magnet2video/internal/model/transcode"
+	"magnet2video/internal/queue"
+	redisMgr "magnet2video/internal/redis"
+	"magnet2video/pkg/serve/service"
+)
+
+const (
+	// idempotencyTTL is how long a processed event id is remembered in Redis.
+	idempotencyTTL = 5 * time.Minute
+	// idempotencyKeyPrefix is the redis key prefix for the SETNX dedup.
+	idempotencyKeyPrefix = "worker:event:seen:"
+)
+
+// WorkerEventProcessor translates worker events into database mutations and
+// follow-up queue messages. Implements queue.Handler.
+type WorkerEventProcessor struct {
+	config           *configs.Config
+	loggerManager    logger.LoggerManager
+	dbManager        db.DatabaseManager
+	redisManager     redisMgr.RedisManager
+	queueProducer    queue.Producer
+	transcodeChecker service.TranscodeChecker
+}
+
+// NewWorkerEventProcessor constructs a processor.
+func NewWorkerEventProcessor(
+	config *configs.Config,
+	loggerManager logger.LoggerManager,
+	dbManager db.DatabaseManager,
+	redisManager redisMgr.RedisManager,
+	queueProducer queue.Producer,
+) *WorkerEventProcessor {
+	return &WorkerEventProcessor{
+		config:        config,
+		loggerManager: loggerManager,
+		dbManager:     dbManager,
+		redisManager:  redisManager,
+		queueProducer: queueProducer,
+	}
+}
+
+// SetTranscodeChecker wires the transcode service for post-download triggering.
+// Called after all services are initialised to avoid cyclic construction.
+func (p *WorkerEventProcessor) SetTranscodeChecker(checker service.TranscodeChecker) {
+	p.transcodeChecker = checker
+}
+
+// Handle implements queue.Handler.
+func (p *WorkerEventProcessor) Handle(ctx context.Context, msg *queue.Message) error {
+	var event eventTypes.WorkerEvent
+	if err := json.Unmarshal(msg.Value, &event); err != nil {
+		p.loggerManager.Logger().Errorf("failed to unmarshal worker event: %v", err)
+		return nil // drop malformed events rather than re-queuing
+	}
+
+	// Idempotency: same event-id within TTL is processed once.
+	if p.isDuplicate(ctx, event.EventID) {
+		return nil
+	}
+
+	switch event.EventType {
+	case eventTypes.EventTypeTranscodeJobStarted:
+		return p.handleTranscodeStarted(ctx, &event)
+	case eventTypes.EventTypeTranscodeJobProgress:
+		return p.handleTranscodeProgress(ctx, &event)
+	case eventTypes.EventTypeTranscodeJobCompleted:
+		return p.handleTranscodeCompleted(ctx, &event)
+	case eventTypes.EventTypeTranscodeJobFailed:
+		return p.handleTranscodeFailed(ctx, &event)
+	case eventTypes.EventTypeSubtitleExtracted:
+		return p.handleSubtitleExtracted(ctx, &event)
+	case eventTypes.EventTypeCloudUploadStarted:
+		return p.handleCloudUploadStarted(ctx, &event)
+	case eventTypes.EventTypeCloudUploadCompleted:
+		return p.handleCloudUploadCompleted(ctx, &event)
+	case eventTypes.EventTypeCloudUploadFailed:
+		return p.handleCloudUploadFailed(ctx, &event)
+	case eventTypes.EventTypeDownloadProgress:
+		return p.handleDownloadProgress(ctx, &event)
+	case eventTypes.EventTypeDownloadCompleted:
+		return p.handleDownloadCompleted(ctx, &event)
+	case eventTypes.EventTypeDownloadFailed:
+		return p.handleDownloadFailed(ctx, &event)
+	case eventTypes.EventTypePosterCandidateUploaded:
+		return p.handlePosterCandidate(ctx, &event)
+	default:
+		p.loggerManager.Logger().Warnf("unknown worker event type: %s", event.EventType)
+		return nil
+	}
+}
+
+// isDuplicate uses Redis SETNX to dedupe events by EventID within idempotencyTTL.
+// Returns true if this event has already been processed.
+func (p *WorkerEventProcessor) isDuplicate(ctx context.Context, eventID string) bool {
+	if eventID == "" || p.redisManager == nil {
+		return false
+	}
+	client := p.redisManager.Client()
+	if client == nil {
+		return false
+	}
+	key := idempotencyKeyPrefix + eventID
+	ok, err := client.SetNX(ctx, key, 1, idempotencyTTL).Result()
+	if err != nil {
+		p.loggerManager.Logger().Warnf("redis setnx failed for event dedup: %v", err)
+		return false
+	}
+	return !ok // SetNX returns true when the key was set (= first time); duplicate when false
+}
+
+// ---- Transcode handlers ----
+
+func (p *WorkerEventProcessor) handleTranscodeStarted(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.TranscodeJobStartedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	db := p.dbManager.DB()
+	if err := db.Model(&transcodeModel.TranscodeJob{}).
+		Where("id = ?", payload.JobID).
+		Updates(map[string]any{
+			"status":     transcodeModel.JobStatusProcessing,
+			"progress":   0,
+			"started_at": time.Now().Unix(),
+		}).Error; err != nil {
+		return err
+	}
+	db.Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.FileIndex).
+		Update("transcode_status", torrentModel.TranscodeStatusProcessing)
+	return p.recomputeTranscodeStatus(payload.TorrentID)
+}
+
+func (p *WorkerEventProcessor) handleTranscodeProgress(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.TranscodeJobProgressPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	db := p.dbManager.DB()
+	db.Model(&transcodeModel.TranscodeJob{}).
+		Where("id = ?", payload.JobID).
+		Update("progress", payload.Progress)
+	// Aggregate torrent transcode_progress using the completed-count + current-progress heuristic.
+	return p.recomputeTranscodeProgress(payload.TorrentID, payload.Progress)
+}
+
+func (p *WorkerEventProcessor) handleTranscodeCompleted(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.TranscodeJobCompletedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	db := p.dbManager.DB()
+
+	// 1. Update job record
+	if err := db.Model(&transcodeModel.TranscodeJob{}).
+		Where("id = ?", payload.JobID).
+		Updates(map[string]any{
+			"status":       transcodeModel.JobStatusCompleted,
+			"progress":     100,
+			"output_path":  payload.OutputPath,
+			"completed_at": time.Now().Unix(),
+		}).Error; err != nil {
+		return err
+	}
+
+	// 2. Update source file, create transcoded file entry
+	var sourceFile torrentModel.TorrentFile
+	if err := db.Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.FileIndex).First(&sourceFile).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	} else {
+		db.Model(&sourceFile).Updates(map[string]any{
+			"transcode_status": torrentModel.TranscodeStatusCompleted,
+			"transcoded_path":  payload.OutputPath,
+			"transcode_error":  "",
+		})
+	}
+
+	var count int64
+	db.Model(&torrentModel.TorrentFile{}).Where("torrent_id = ?", payload.TorrentID).Count(&count)
+	newIndex := int(count)
+
+	parentPath := ""
+	if sourceFile.ID != 0 {
+		parentPath = sourceFile.Path
+	}
+
+	newFile := torrentModel.TorrentFile{
+		TorrentID:    payload.TorrentID,
+		Index:        newIndex,
+		Path:         payload.OutputPath,
+		Size:         payload.OutputSize,
+		IsSelected:   true,
+		IsShareable:  false,
+		IsStreamable: true,
+		Type:         "video",
+		Source:       "transcoded",
+		ParentPath:   parentPath,
+	}
+	if err := db.Create(&newFile).Error; err != nil {
+		return err
+	}
+
+	// 3. Queue cloud upload for the transcoded file (if cloud storage is on).
+	if p.config.CloudStorageConfig.Enabled && p.queueProducer != nil {
+		p.queueCloudUpload(ctx, payload.TorrentID, payload.InfoHash, newIndex, payload.OutputPath, payload.OutputSize, true, payload.CreatorID)
+	}
+
+	return p.recomputeTranscodeStatus(payload.TorrentID)
+}
+
+func (p *WorkerEventProcessor) handleTranscodeFailed(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.TranscodeJobFailedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	db := p.dbManager.DB()
+	db.Model(&transcodeModel.TranscodeJob{}).
+		Where("id = ?", payload.JobID).
+		Updates(map[string]any{
+			"status":        transcodeModel.JobStatusFailed,
+			"error_message": payload.ErrorMsg,
+		})
+	db.Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.FileIndex).
+		Updates(map[string]any{
+			"transcode_status": torrentModel.TranscodeStatusFailed,
+			"transcode_error":  payload.ErrorMsg,
+		})
+	return p.recomputeTranscodeStatus(payload.TorrentID)
+}
+
+func (p *WorkerEventProcessor) handleSubtitleExtracted(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.SubtitleExtractedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	db := p.dbManager.DB()
+
+	var parent torrentModel.TorrentFile
+	parentPath := ""
+	if err := db.Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.ParentFileIndex).First(&parent).Error; err == nil {
+		parentPath = parent.Path
+	}
+
+	var count int64
+	db.Model(&torrentModel.TorrentFile{}).Where("torrent_id = ?", payload.TorrentID).Count(&count)
+	newIndex := int(count)
+
+	newFile := torrentModel.TorrentFile{
+		TorrentID:     payload.TorrentID,
+		Index:         newIndex,
+		Path:          payload.FilePath,
+		Size:          payload.FileSize,
+		IsSelected:    true,
+		IsShareable:   false,
+		IsStreamable:  false,
+		Type:          "subtitle",
+		Source:        "extracted",
+		ParentPath:    parentPath,
+		StreamIndex:   payload.StreamIndex,
+		Language:      payload.Language,
+		LanguageName:  payload.LanguageName,
+		Title:         payload.Title,
+		Format:        payload.Format,
+		OriginalCodec: payload.OriginalCodec,
+	}
+	if err := db.Create(&newFile).Error; err != nil {
+		return err
+	}
+
+	if p.config.CloudStorageConfig.Enabled && p.queueProducer != nil {
+		p.queueCloudUpload(ctx, payload.TorrentID, payload.InfoHash, newIndex, payload.FilePath, payload.FileSize, false, payload.CreatorID)
+	}
+	return nil
+}
+
+// ---- Cloud upload handlers ----
+
+func (p *WorkerEventProcessor) handleCloudUploadStarted(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.CloudUploadStartedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	p.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.FileIndex).
+		Update("cloud_upload_status", torrentModel.CloudUploadStatusUploading)
+	return p.recomputeCloudStatus(payload.TorrentID)
+}
+
+func (p *WorkerEventProcessor) handleCloudUploadCompleted(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.CloudUploadCompletedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	p.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.FileIndex).
+		Updates(map[string]any{
+			"cloud_upload_status": torrentModel.CloudUploadStatusCompleted,
+			"cloud_path":          payload.CloudPath,
+			"cloud_upload_error":  "",
+		})
+	return p.recomputeCloudStatus(payload.TorrentID)
+}
+
+func (p *WorkerEventProcessor) handleCloudUploadFailed(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.CloudUploadFailedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	p.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.FileIndex).
+		Updates(map[string]any{
+			"cloud_upload_status": torrentModel.CloudUploadStatusFailed,
+			"cloud_upload_error":  payload.ErrorMsg,
+		})
+	return p.recomputeCloudStatus(payload.TorrentID)
+}
+
+// ---- Download handlers ----
+
+func (p *WorkerEventProcessor) handleDownloadProgress(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.DownloadProgressPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	updates := map[string]any{
+		"progress": payload.Progress,
+		"status":   downloadStatusFromString(payload.Status),
+	}
+	p.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("info_hash = ?", payload.InfoHash).
+		Updates(updates)
+	return nil
+}
+
+func (p *WorkerEventProcessor) handleDownloadCompleted(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.DownloadCompletedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	var t torrentModel.Torrent
+	if err := p.dbManager.DB().Where("info_hash = ?", payload.InfoHash).First(&t).Error; err != nil {
+		return err
+	}
+	p.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", t.ID).
+		Updates(map[string]any{
+			"status":   torrentModel.StatusCompleted,
+			"progress": 100,
+		})
+	if p.transcodeChecker != nil {
+		go p.transcodeChecker.TriggerTranscodeCheck(t.ID)
+	}
+	return nil
+}
+
+func (p *WorkerEventProcessor) handleDownloadFailed(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.DownloadFailedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	p.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("info_hash = ?", payload.InfoHash).
+		Update("status", torrentModel.StatusFailed)
+	return nil
+}
+
+func (p *WorkerEventProcessor) handlePosterCandidate(ctx context.Context, event *eventTypes.WorkerEvent) error {
+	var payload eventTypes.PosterCandidateUploadedPayload
+	if err := event.DecodePayload(&payload); err != nil {
+		return err
+	}
+	// Treat as a regular cloud-upload completion for the image file.
+	p.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.FileIndex).
+		Updates(map[string]any{
+			"cloud_upload_status": torrentModel.CloudUploadStatusCompleted,
+			"cloud_path":          payload.CloudPath,
+			"cloud_upload_error":  "",
+		})
+	return p.recomputeCloudStatus(payload.TorrentID)
+}
+
+// ---- helpers ----
+
+// queueCloudUpload enqueues a cloud-upload job message and updates the pending counter.
+func (p *WorkerEventProcessor) queueCloudUpload(ctx context.Context, torrentID int64, infoHash string, fileIndex int, localPath string, fileSize int64, isTranscoded bool, creatorID int64) {
+	pathPrefix := p.config.CloudStorageConfig.PathPrefix
+	if pathPrefix == "" {
+		pathPrefix = "torrents"
+	}
+	fileName := filepath.Base(localPath)
+	cloudPath := fmt.Sprintf("%s/%s/%s", pathPrefix, infoHash, fileName)
+
+	contentType := guessContentType(localPath)
+
+	db := p.dbManager.DB()
+	db.Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Update("cloud_upload_status", torrentModel.CloudUploadStatusPending)
+	db.Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentID).
+		UpdateColumn("total_cloud_upload", gorm.Expr("total_cloud_upload + ?", 1))
+
+	msg := cloudTypes.CloudUploadMessage{
+		TorrentID:     torrentID,
+		InfoHash:      infoHash,
+		FileIndex:     fileIndex,
+		SubtitleIndex: -1,
+		LocalPath:     localPath,
+		CloudPath:     cloudPath,
+		ContentType:   contentType,
+		FileSize:      fileSize,
+		IsTranscoded:  isTranscoded,
+		CreatorID:     creatorID,
+	}
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		p.loggerManager.Logger().Errorf("marshal cloud upload message: %v", err)
+		return
+	}
+	if err := p.queueProducer.Send(ctx, cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
+		p.loggerManager.Logger().Errorf("send cloud upload message: %v", err)
+	} else {
+		p.loggerManager.Logger().Infof("queued cloud upload: torrentID=%d, fileIndex=%d, cloudPath=%s",
+			torrentID, fileIndex, cloudPath)
+	}
+}
+
+// recomputeTranscodeStatus aggregates per-file transcode status into the torrent record.
+func (p *WorkerEventProcessor) recomputeTranscodeStatus(torrentID int64) error {
+	type Row struct {
+		Status int
+		Count  int
+	}
+	var rows []Row
+	if err := p.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Select("transcode_status as status, count(*) as count").
+		Where("torrent_id = ? AND (source = '' OR source = 'original')", torrentID).
+		Group("transcode_status").
+		Scan(&rows).Error; err != nil {
+		return err
+	}
+	var pending, processing, completed, failed int
+	for _, r := range rows {
+		switch r.Status {
+		case torrentModel.TranscodeStatusPending:
+			pending += r.Count
+		case torrentModel.TranscodeStatusProcessing:
+			processing += r.Count
+		case torrentModel.TranscodeStatusCompleted:
+			completed += r.Count
+		case torrentModel.TranscodeStatusFailed:
+			failed += r.Count
+		}
+	}
+	updates := map[string]any{
+		"transcode_status":   torrentModel.TranscodeStatusNone,
+		"transcode_progress": 0,
+		"transcoded_count":   completed,
+	}
+	switch {
+	case processing > 0:
+		updates["transcode_status"] = torrentModel.TranscodeStatusProcessing
+	case pending > 0:
+		updates["transcode_status"] = torrentModel.TranscodeStatusPending
+	case failed > 0 && completed == 0:
+		updates["transcode_status"] = torrentModel.TranscodeStatusFailed
+	case completed > 0 || (pending == 0 && processing == 0 && failed == 0):
+		updates["transcode_status"] = torrentModel.TranscodeStatusCompleted
+		updates["transcode_progress"] = 100
+	}
+	return p.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentID).
+		Updates(updates).Error
+}
+
+// recomputeTranscodeProgress mixes current-file progress into the aggregate.
+func (p *WorkerEventProcessor) recomputeTranscodeProgress(torrentID int64, currentProgress int) error {
+	type Row struct {
+		Status int
+		Count  int
+	}
+	var rows []Row
+	if err := p.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Select("transcode_status as status, count(*) as count").
+		Where("torrent_id = ? AND (source = '' OR source = 'original')", torrentID).
+		Group("transcode_status").
+		Scan(&rows).Error; err != nil {
+		return err
+	}
+	var totalWeighted, totalCount int
+	for _, r := range rows {
+		switch r.Status {
+		case torrentModel.TranscodeStatusCompleted:
+			totalWeighted += 100 * r.Count
+			totalCount += r.Count
+		case torrentModel.TranscodeStatusProcessing, torrentModel.TranscodeStatusPending:
+			totalCount += r.Count
+		}
+	}
+	overall := 0
+	if totalCount > 0 {
+		overall = (totalWeighted + currentProgress) / totalCount
+	}
+	return p.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentID).
+		Update("transcode_progress", overall).Error
+}
+
+// recomputeCloudStatus aggregates per-file cloud_upload_status into the torrent record.
+func (p *WorkerEventProcessor) recomputeCloudStatus(torrentID int64) error {
+	type Row struct {
+		Status int
+		Count  int
+	}
+	var rows []Row
+	if err := p.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Select("cloud_upload_status as status, count(*) as count").
+		Where("torrent_id = ?", torrentID).
+		Group("cloud_upload_status").
+		Scan(&rows).Error; err != nil {
+		return err
+	}
+	var pending, uploading, completed, failed int
+	var total int
+	for _, r := range rows {
+		if r.Status != torrentModel.CloudUploadStatusNone {
+			total += r.Count
+		}
+		switch r.Status {
+		case torrentModel.CloudUploadStatusPending:
+			pending += r.Count
+		case torrentModel.CloudUploadStatusUploading:
+			uploading += r.Count
+		case torrentModel.CloudUploadStatusCompleted:
+			completed += r.Count
+		case torrentModel.CloudUploadStatusFailed:
+			failed += r.Count
+		}
+	}
+	updates := map[string]any{
+		"total_cloud_upload":    total,
+		"cloud_uploaded_count":  completed,
+		"cloud_upload_progress": 0,
+		"cloud_upload_status":   torrentModel.CloudUploadStatusNone,
+	}
+	if total > 0 {
+		updates["cloud_upload_progress"] = int(float64(completed) * 100 / float64(total))
+	}
+	switch {
+	case uploading > 0:
+		updates["cloud_upload_status"] = torrentModel.CloudUploadStatusUploading
+	case pending > 0:
+		updates["cloud_upload_status"] = torrentModel.CloudUploadStatusPending
+	case failed > 0 && completed == 0:
+		updates["cloud_upload_status"] = torrentModel.CloudUploadStatusFailed
+	case completed > 0:
+		updates["cloud_upload_status"] = torrentModel.CloudUploadStatusCompleted
+	}
+	return p.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", torrentID).
+		Updates(updates).Error
+}
+
+func guessContentType(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".flac":
+		return "audio/flac"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".srt":
+		return "application/x-subrip"
+	case ".ass":
+		return "text/x-ssa"
+	case ".vtt":
+		return "text/vtt"
+	case ".pdf":
+		return "application/pdf"
+	case ".zip":
+		return "application/zip"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func downloadStatusFromString(status string) int {
+	switch status {
+	case "downloading":
+		return torrentModel.StatusDownloading
+	case "completed", "seeding":
+		return torrentModel.StatusCompleted
+	case "paused":
+		return torrentModel.StatusPaused
+	case "failed":
+		return torrentModel.StatusFailed
+	default:
+		return torrentModel.StatusPending
+	}
+}

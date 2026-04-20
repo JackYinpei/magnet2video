@@ -20,11 +20,20 @@ type AppConfig struct {
 	AppName    string      `mapstructure:"APP_NAME"` // Application name
 	AppHost    string      `mapstructure:"APP_HOST"` // Application host
 	AppPort    string      `mapstructure:"APP_PORT"` // Application port
+	Mode       string      `mapstructure:"MODE"`     // Deployment mode: "all" | "server" | "worker"
+	WorkerID   string      `mapstructure:"WORKER_ID"` // Worker identifier (worker/all mode)
 	CORSConfig CORSConfig  `mapstructure:"CORS"`     // CORS configuration
 	Email      EmailConfig `mapstructure:"EMAIL"`    // Email configuration
 	JWT        JWTConfig   `mapstructure:"JWT"`      // JWT authentication configuration
 	User       UserConfig  `mapstructure:"USER"`     // User related configuration
 }
+
+// Deployment mode constants
+const (
+	ModeAll    = "all"    // single-process (everything in one binary)
+	ModeServer = "server" // API/DB/events-consumer; no torrent download/transcode work
+	ModeWorker = "worker" // torrent download + transcode + cloud upload; no DB/Gin
+)
 
 // EmailConfig email configuration
 type EmailConfig struct {

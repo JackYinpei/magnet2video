@@ -15,6 +15,7 @@ tmp/
 configs/config.yml
 /download
 magnet
+/bin/
 
 # IDE
 .vscode/

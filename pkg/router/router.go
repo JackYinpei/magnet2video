@@ -23,4 +23,5 @@ func New(r *gin.Engine, container *wire.Container) {
 	routes.RegisterUserRoutes(container, v1, v2)
 	routes.RegisterTorrentRoutes(container, v1, v2)
 	routes.RegisterAdminRoutes(container, v1, v2)
+	routes.RegisterWorkerRoutes(container, v1)
 }
