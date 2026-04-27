@@ -290,6 +290,13 @@ func bindEnvVariables() {
 	_ = v.BindEnv("CLOUD_STORAGE.ADDRESSING_STYLE", "S3_ADDRESSING_STYLE")
 	_ = v.BindEnv("CLOUD_STORAGE.SIGNATURE_VERSION", "S3_SIGNATURE_VERSION")
 	_ = v.BindEnv("CLOUD_STORAGE.PUBLIC_URL", "CLOUD_STORAGE_PUBLIC_URL")
+
+	// Queue bindings
+	_ = v.BindEnv("QUEUE.TYPE", "QUEUE_TYPE")
+	_ = v.BindEnv("QUEUE.RABBITMQ.URL", "RABBITMQ_URL")
+
+	// Worker identity (worker mode)
+	_ = v.BindEnv("APP.WORKER_ID", "WORKER_ID")
 }
 
 // overrideFromEnv overrides config values from environment variables
@@ -402,6 +409,19 @@ func overrideFromEnv(config *Config) {
 	}
 	if val := os.Getenv("CLOUD_STORAGE_PUBLIC_URL"); val != "" {
 		config.CloudStorageConfig.PublicURL = val
+	}
+
+	// Queue overrides
+	if val := os.Getenv("QUEUE_TYPE"); val != "" {
+		config.QueueConfig.Type = val
+	}
+	if val := os.Getenv("RABBITMQ_URL"); val != "" {
+		config.QueueConfig.RabbitMQ.URL = val
+	}
+
+	// Worker identity (worker mode)
+	if val := os.Getenv("WORKER_ID"); val != "" {
+		config.AppConfig.WorkerID = val
 	}
 }
 

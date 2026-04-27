@@ -12,7 +12,6 @@ gcs-sa.json
 .logs/
 tmp/
 /database/
-configs/config.yml
 /download
 magnet
 /bin/

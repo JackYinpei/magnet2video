@@ -10,6 +10,11 @@ docker-compose.yml
 .docker.env
 .docker.env.example
 
+# Secrets — never bake into image (GHCR is public)
+gcs-sa.json
+*.pem
+*.key
+
 # Build artifacts
 server
 
