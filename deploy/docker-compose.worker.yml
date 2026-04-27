@@ -7,10 +7,11 @@
 services:
   app:
     image: ghcr.io/jackyinpei/magnet2video:latest
+    platform: linux/amd64
     container_name: magnet2video-worker
     command: ["./server", "-mode=worker"]
     env_file:
-      - .env
+      - ${WORKER_ENV_FILE:-.env}
     ports:
       - "42069:42069"
       - "42069:42069/udp"

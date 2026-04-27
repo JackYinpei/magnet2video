@@ -317,6 +317,37 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 
 // GetProgress returns download progress for a torrent
 func (ts *TorrentServiceImpl) GetProgress(c *gin.Context, req *dto.GetProgressRequest) (*vo.DownloadProgressResponse, error) {
+	if ts.isServerOnly() {
+		if progress, ok := ts.cachedDownloadProgress(c.Request.Context(), req.InfoHash); ok {
+			return &vo.DownloadProgressResponse{
+				InfoHash:              progress.InfoHash,
+				Name:                  progress.Name,
+				TotalSize:             progress.TotalSize,
+				DownloadedSize:        progress.DownloadedSize,
+				Progress:              progress.Progress,
+				Status:                progress.Status,
+				Peers:                 progress.Peers,
+				Seeds:                 progress.Seeds,
+				DownloadSpeed:         progress.DownloadSpeed,
+				DownloadSpeedReadable: formatSpeed(progress.DownloadSpeed),
+			}, nil
+		}
+
+		var t torrentModel.Torrent
+		if err := ts.dbManager.DB().Where("info_hash = ? AND deleted = ?", req.InfoHash, false).First(&t).Error; err != nil {
+			return nil, err
+		}
+		return &vo.DownloadProgressResponse{
+			InfoHash:              t.InfoHash,
+			Name:                  t.Name,
+			TotalSize:             t.TotalSize,
+			Progress:              t.Progress,
+			Status:                statusStringFromModel(t.Status),
+			DownloadSpeed:         0,
+			DownloadSpeedReadable: formatSpeed(0),
+		}, nil
+	}
+
 	client := ts.torrentManager.Client()
 
 	progress, err := client.GetProgress(req.InfoHash)
@@ -370,6 +401,8 @@ func (ts *TorrentServiceImpl) PauseDownload(c *gin.Context, req *dto.PauseDownlo
 		Update("status", torrentModel.StatusPaused).Error; err != nil {
 		ts.loggerManager.Logger().Warnf("failed to update torrent status in database: %v", err)
 	}
+	ts.deleteCachedDownloadProgress(c.Request.Context(), req.InfoHash)
+	ts.invalidateTorrentListCache(auth.GetUserID(c))
 
 	return &vo.PauseDownloadResponse{
 		InfoHash: req.InfoHash,
@@ -399,6 +432,7 @@ func (ts *TorrentServiceImpl) ResumeDownload(c *gin.Context, req *dto.ResumeDown
 		Update("status", torrentModel.StatusDownloading).Error; err != nil {
 		ts.loggerManager.Logger().Warnf("failed to update torrent status in database: %v", err)
 	}
+	ts.invalidateTorrentListCache(auth.GetUserID(c))
 
 	return &vo.ResumeDownloadResponse{
 		InfoHash: req.InfoHash,
@@ -428,6 +462,7 @@ func (ts *TorrentServiceImpl) RemoveTorrent(c *gin.Context, req *dto.RemoveTorre
 		Update("deleted", true).Error; err != nil {
 		ts.loggerManager.Logger().Warnf("failed to delete torrent from database: %v", err)
 	}
+	ts.deleteCachedDownloadProgress(c.Request.Context(), req.InfoHash)
 
 	// 删除后失效缓存
 	userID := auth.GetUserID(c)
@@ -488,7 +523,7 @@ func (ts *TorrentServiceImpl) ListTorrents(c *gin.Context) (*vo.TorrentListRespo
 	}
 
 	// 转换为列表项，包含实时统计数据（始终是最新的，不缓存）
-	items := ts.torrentListToItems(cachedTorrents)
+	items := ts.torrentListToItems(ctx, cachedTorrents)
 
 	return &vo.TorrentListResponse{
 		Torrents: items,
@@ -550,7 +585,7 @@ func (ts *TorrentServiceImpl) ListPublicTorrents(c *gin.Context) (*vo.TorrentLis
 	}
 
 	// 转换为列表项，包含实时统计数据（始终是最新的，不缓存）
-	items := ts.torrentListToItems(cachedTorrents)
+	items := ts.torrentListToItems(ctx, cachedTorrents)
 
 	return &vo.TorrentListResponse{
 		Torrents: items,
@@ -559,7 +594,7 @@ func (ts *TorrentServiceImpl) ListPublicTorrents(c *gin.Context) (*vo.TorrentLis
 }
 
 // torrentListToItems converts a list of torrent models to list items with real-time stats
-func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent) []vo.TorrentListItem {
+func (ts *TorrentServiceImpl) torrentListToItems(ctx context.Context, torrents []torrentModel.Torrent) []vo.TorrentListItem {
 	items := make([]vo.TorrentListItem, len(torrents))
 	for i, t := range torrents {
 		items[i] = vo.TorrentListItem{
@@ -599,7 +634,15 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 			items[i].CloudFiles = cloudFiles
 		}
 
-		// Mix in real-time stats if downloading or seeding
+		if progress, ok := ts.cachedDownloadProgress(ctx, t.InfoHash); ok {
+			applyCachedProgress(&items[i], progress)
+			continue
+		}
+
+		// Mix in local real-time stats when this process owns the torrent client.
+		if ts.isServerOnly() {
+			continue
+		}
 		if t.Status == torrentModel.StatusDownloading || t.Status == torrentModel.StatusCompleted {
 			if progress, err := ts.torrentManager.Client().GetProgress(t.InfoHash); err == nil {
 				items[i].Progress = progress.Progress
@@ -629,6 +672,36 @@ func (ts *TorrentServiceImpl) torrentListToItems(torrents []torrentModel.Torrent
 		}
 	}
 	return items
+}
+
+func (ts *TorrentServiceImpl) cachedDownloadProgress(ctx context.Context, infoHash string) (eventTypes.DownloadProgressPayload, bool) {
+	var progress eventTypes.DownloadProgressPayload
+	if ts.cacheManager == nil || infoHash == "" {
+		return progress, false
+	}
+	if err := ts.cacheManager.Get(ctx, cache.TorrentProgressKey(infoHash), &progress); err != nil {
+		return progress, false
+	}
+	return progress, true
+}
+
+func (ts *TorrentServiceImpl) deleteCachedDownloadProgress(ctx context.Context, infoHash string) {
+	if ts.cacheManager == nil || infoHash == "" {
+		return
+	}
+	if err := ts.cacheManager.Delete(ctx, cache.TorrentProgressKey(infoHash)); err != nil {
+		ts.loggerManager.Logger().Warnf("failed to delete cached download progress: %v", err)
+	}
+}
+
+func applyCachedProgress(item *vo.TorrentListItem, progress eventTypes.DownloadProgressPayload) {
+	item.Progress = progress.Progress
+	item.Status = getStatusFromString(progress.Status)
+	item.DownloadSpeed = progress.DownloadSpeed
+	item.DownloadSpeedReadable = formatSpeed(progress.DownloadSpeed)
+	if item.TotalSize == 0 {
+		item.TotalSize = progress.TotalSize
+	}
 }
 
 // GetTorrentDetail gets detailed information about a torrent
@@ -937,6 +1010,21 @@ func getStatusFromString(status string) int {
 		return torrentModel.StatusFailed
 	default:
 		return torrentModel.StatusPending
+	}
+}
+
+func statusStringFromModel(status int) string {
+	switch status {
+	case torrentModel.StatusDownloading:
+		return "downloading"
+	case torrentModel.StatusCompleted:
+		return "completed"
+	case torrentModel.StatusPaused:
+		return "paused"
+	case torrentModel.StatusFailed:
+		return "failed"
+	default:
+		return "pending"
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"gorm.io/gorm"
 
 	"magnet2video/configs"
+	"magnet2video/internal/cache"
 	cloudTypes "magnet2video/internal/cloud/types"
 	"magnet2video/internal/db"
 	eventTypes "magnet2video/internal/events/types"
@@ -32,6 +33,8 @@ const (
 	idempotencyTTL = 5 * time.Minute
 	// idempotencyKeyPrefix is the redis key prefix for the SETNX dedup.
 	idempotencyKeyPrefix = "worker:event:seen:"
+	// downloadProgressTTL keeps high-frequency download stats out of MySQL.
+	downloadProgressTTL = 30 * time.Second
 )
 
 // WorkerEventProcessor translates worker events into database mutations and
@@ -348,13 +351,16 @@ func (p *WorkerEventProcessor) handleDownloadProgress(ctx context.Context, event
 	if err := event.DecodePayload(&payload); err != nil {
 		return err
 	}
-	updates := map[string]any{
-		"progress": payload.Progress,
-		"status":   downloadStatusFromString(payload.Status),
+	if p.redisManager == nil || p.redisManager.Client() == nil {
+		return nil
 	}
-	p.dbManager.DB().Model(&torrentModel.Torrent{}).
-		Where("info_hash = ?", payload.InfoHash).
-		Updates(updates)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if err := p.redisManager.Client().Set(ctx, cache.TorrentProgressKey(payload.InfoHash), data, downloadProgressTTL).Err(); err != nil {
+		p.loggerManager.Logger().Warnf("failed to cache download progress: %v", err)
+	}
 	return nil
 }
 
@@ -373,6 +379,9 @@ func (p *WorkerEventProcessor) handleDownloadCompleted(ctx context.Context, even
 			"status":   torrentModel.StatusCompleted,
 			"progress": 100,
 		})
+	if p.redisManager != nil && p.redisManager.Client() != nil {
+		_ = p.redisManager.Client().Del(ctx, cache.TorrentProgressKey(payload.InfoHash)).Err()
+	}
 	if p.transcodeChecker != nil {
 		go p.transcodeChecker.TriggerTranscodeCheck(t.ID)
 	}
@@ -387,6 +396,9 @@ func (p *WorkerEventProcessor) handleDownloadFailed(ctx context.Context, event *
 	p.dbManager.DB().Model(&torrentModel.Torrent{}).
 		Where("info_hash = ?", payload.InfoHash).
 		Update("status", torrentModel.StatusFailed)
+	if p.redisManager != nil && p.redisManager.Client() != nil {
+		_ = p.redisManager.Client().Del(ctx, cache.TorrentProgressKey(payload.InfoHash)).Err()
+	}
 	return nil
 }
 

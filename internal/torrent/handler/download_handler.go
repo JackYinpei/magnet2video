@@ -24,6 +24,7 @@ type DownloadJobHandler struct {
 	loggerManager  logger.LoggerManager
 	torrentManager torrent.TorrentManager
 	gateway        gateway.WorkerGateway
+	reporter       *ProgressReporter
 }
 
 // NewDownloadJobHandler builds a DownloadJobHandler.
@@ -32,12 +33,14 @@ func NewDownloadJobHandler(
 	loggerManager logger.LoggerManager,
 	torrentManager torrent.TorrentManager,
 	workerGateway gateway.WorkerGateway,
+	progressReporter *ProgressReporter,
 ) *DownloadJobHandler {
 	return &DownloadJobHandler{
 		config:         config,
 		loggerManager:  loggerManager,
 		torrentManager: torrentManager,
 		gateway:        workerGateway,
+		reporter:       progressReporter,
 	}
 }
 
@@ -71,17 +74,31 @@ func (h *DownloadJobHandler) Handle(ctx context.Context, msg *queue.Message) err
 			_ = h.gateway.DownloadFailed(ctx, job.InfoHash, err.Error())
 			return nil
 		}
+		if h.reporter != nil {
+			h.reporter.TrackTorrent(job.InfoHash)
+		}
 	case eventTypes.DownloadActionPause:
 		if err := client.PauseDownload(job.InfoHash); err != nil {
 			h.loggerManager.Logger().Errorf("pause download failed: %v", err)
 		}
+		if h.reporter != nil {
+			h.reporter.UntrackTorrent(job.InfoHash)
+		}
 	case eventTypes.DownloadActionResume:
 		if err := client.ResumeDownload(job.InfoHash, job.SelectedFiles); err != nil {
 			h.loggerManager.Logger().Errorf("resume download failed: %v", err)
+			_ = h.gateway.DownloadFailed(ctx, job.InfoHash, err.Error())
+			return nil
+		}
+		if h.reporter != nil {
+			h.reporter.TrackTorrent(job.InfoHash)
 		}
 	case eventTypes.DownloadActionRemove:
 		if err := client.RemoveTorrent(job.InfoHash, job.DeleteFiles); err != nil {
 			h.loggerManager.Logger().Errorf("remove torrent failed: %v", err)
+		}
+		if h.reporter != nil {
+			h.reporter.UntrackTorrent(job.InfoHash)
 		}
 	default:
 		h.loggerManager.Logger().Warnf("unknown download action: %s", job.Action)

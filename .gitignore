@@ -4,6 +4,7 @@
 
 # Env files (keep example)
 .env
+.env.worker
 .local.env
 .docker.env
 gcs-sa.json

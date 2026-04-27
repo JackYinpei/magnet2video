@@ -199,7 +199,7 @@ func buildEventPlumbing(c *Container, config *configs.Config) {
 func buildWorkerHandlers(c *Container, config *configs.Config) {
 	c.TranscodeHandler = transcodeHandler.NewTranscodeHandler(config, c.LoggerManager, c.WorkerGateway)
 	c.CloudUploadHandler = cloudHandler.NewCloudUploadHandler(config, c.LoggerManager, c.WorkerGateway, c.CloudStorageManager, c.QueueProducer)
-	c.DownloadJobHandler = torrentHandler.NewDownloadJobHandler(config, c.LoggerManager, c.TorrentManager, c.WorkerGateway)
+	c.DownloadJobHandler = torrentHandler.NewDownloadJobHandler(config, c.LoggerManager, c.TorrentManager, c.WorkerGateway, c.ProgressReporter)
 }
 
 func buildServicesAndControllers(c *Container, config *configs.Config) {

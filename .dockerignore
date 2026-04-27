@@ -6,6 +6,7 @@
 .dockerignore
 docker-compose.yml
 .env
+.env.worker
 .local.env
 .docker.env
 .docker.env.example
