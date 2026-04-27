@@ -112,6 +112,16 @@ func (p *Publisher) publishOnce(ctx context.Context) {
 		} else {
 			log.Printf("publish heartbeat failed: %v", err)
 		}
+		return
+	}
+	if p.loggerManager != nil {
+		p.loggerManager.Logger().Infof(
+			"Worker heartbeat published: workerID=%s jobs=%d diskFreeGB=%d version=%s",
+			hb.WorkerID,
+			len(hb.CurrentJobs),
+			hb.DiskFreeGB,
+			hb.Version,
+		)
 	}
 }
 

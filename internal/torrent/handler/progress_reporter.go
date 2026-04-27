@@ -6,6 +6,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,6 +21,10 @@ import (
 // Matches the user's preference of ~every 2 seconds.
 const ProgressReportInterval = 2 * time.Second
 
+// ProgressLogInterval controls visible diagnostic logs while keeping progress
+// events frequent enough for Redis/UI updates.
+const ProgressLogInterval = 10 * time.Second
+
 // ProgressReporter periodically polls the local torrent client for active
 // torrents and emits `download.progress` / `download.completed` events.
 type ProgressReporter struct {
@@ -31,6 +36,7 @@ type ProgressReporter struct {
 	// exactly once.
 	mu         sync.Mutex
 	lastStatus map[string]string
+	lastLogAt  map[string]time.Time
 }
 
 // NewProgressReporter constructs a reporter.
@@ -44,6 +50,7 @@ func NewProgressReporter(
 		gateway:        workerGateway,
 		loggerManager:  loggerManager,
 		lastStatus:     make(map[string]string),
+		lastLogAt:      make(map[string]time.Time),
 	}
 }
 
@@ -55,6 +62,9 @@ func (r *ProgressReporter) TrackTorrent(infoHash string) {
 	if _, ok := r.lastStatus[infoHash]; !ok {
 		r.lastStatus[infoHash] = "pending"
 	}
+	if r.loggerManager != nil {
+		r.loggerManager.Logger().Infof("Download progress tracking started: infoHash=%s", infoHash)
+	}
 }
 
 // UntrackTorrent removes a torrent from the watch list.
@@ -62,10 +72,17 @@ func (r *ProgressReporter) UntrackTorrent(infoHash string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.lastStatus, infoHash)
+	delete(r.lastLogAt, infoHash)
+	if r.loggerManager != nil {
+		r.loggerManager.Logger().Infof("Download progress tracking stopped: infoHash=%s", infoHash)
+	}
 }
 
 // Start runs the report loop until the context is cancelled.
 func (r *ProgressReporter) Start(ctx context.Context) {
+	if r.loggerManager != nil {
+		r.loggerManager.Logger().Infof("Download progress reporter started: interval=%s, log_interval=%s", ProgressReportInterval, ProgressLogInterval)
+	}
 	ticker := time.NewTicker(ProgressReportInterval)
 	defer ticker.Stop()
 
@@ -103,7 +120,7 @@ func (r *ProgressReporter) reportOnce(ctx context.Context) {
 }
 
 func (r *ProgressReporter) publish(ctx context.Context, pr *torrentInternal.DownloadProgress) {
-	_ = r.gateway.DownloadProgress(ctx, eventTypes.DownloadProgressPayload{
+	err := r.gateway.DownloadProgress(ctx, eventTypes.DownloadProgressPayload{
 		InfoHash:       pr.InfoHash,
 		Name:           pr.Name,
 		Progress:       pr.Progress,
@@ -114,6 +131,32 @@ func (r *ProgressReporter) publish(ctx context.Context, pr *torrentInternal.Down
 		Seeds:          pr.Seeds,
 		DownloadSpeed:  pr.DownloadSpeed,
 	})
+	if r.shouldLog(pr.InfoHash) && r.loggerManager != nil {
+		if err != nil {
+			r.loggerManager.Logger().Warnf(
+				"Download progress publish failed: infoHash=%s status=%s progress=%.2f%% speed=%s peers=%d seeds=%d err=%v",
+				pr.InfoHash,
+				pr.Status,
+				pr.Progress,
+				formatSpeed(pr.DownloadSpeed),
+				pr.Peers,
+				pr.Seeds,
+				err,
+			)
+		} else {
+			r.loggerManager.Logger().Infof(
+				"Download progress published: infoHash=%s status=%s progress=%.2f%% speed=%s peers=%d seeds=%d downloaded=%s/%s",
+				pr.InfoHash,
+				pr.Status,
+				pr.Progress,
+				formatSpeed(pr.DownloadSpeed),
+				pr.Peers,
+				pr.Seeds,
+				formatBytes(pr.DownloadedSize),
+				formatBytes(pr.TotalSize),
+			)
+		}
+	}
 
 	r.mu.Lock()
 	prev := r.lastStatus[pr.InfoHash]
@@ -123,4 +166,33 @@ func (r *ProgressReporter) publish(ctx context.Context, pr *torrentInternal.Down
 	if pr.Status == "completed" && prev != "completed" {
 		_ = r.gateway.DownloadCompleted(ctx, pr.InfoHash)
 	}
+}
+
+func (r *ProgressReporter) shouldLog(infoHash string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	last, ok := r.lastLogAt[infoHash]
+	if ok && now.Sub(last) < ProgressLogInterval {
+		return false
+	}
+	r.lastLogAt[infoHash] = now
+	return true
+}
+
+func formatSpeed(bytesPerSecond int64) string {
+	return fmt.Sprintf("%s/s", formatBytes(bytesPerSecond))
+}
+
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

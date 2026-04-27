@@ -32,6 +32,14 @@ func (c *Consumer) Handle(ctx context.Context, msg *queue.Message) error {
 	}
 	if err := c.store.Record(ctx, &hb); err != nil {
 		c.loggerManager.Logger().Warnf("heartbeat record failed: %v", err)
+		return nil
 	}
+	c.loggerManager.Logger().Infof(
+		"Worker heartbeat received: workerID=%s jobs=%d diskFreeGB=%d version=%s",
+		hb.WorkerID,
+		len(hb.CurrentJobs),
+		hb.DiskFreeGB,
+		hb.Version,
+	)
 	return nil
 }

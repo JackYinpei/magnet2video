@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -46,6 +47,9 @@ type WorkerEventProcessor struct {
 	redisManager     redisMgr.RedisManager
 	queueProducer    queue.Producer
 	transcodeChecker service.TranscodeChecker
+
+	progressLogMu sync.Mutex
+	progressLogAt map[string]time.Time
 }
 
 // NewWorkerEventProcessor constructs a processor.
@@ -62,6 +66,7 @@ func NewWorkerEventProcessor(
 		dbManager:     dbManager,
 		redisManager:  redisManager,
 		queueProducer: queueProducer,
+		progressLogAt: make(map[string]time.Time),
 	}
 }
 
@@ -351,7 +356,22 @@ func (p *WorkerEventProcessor) handleDownloadProgress(ctx context.Context, event
 	if err := event.DecodePayload(&payload); err != nil {
 		return err
 	}
+	if p.shouldLogDownloadProgress(payload.InfoHash) {
+		p.loggerManager.Logger().Infof(
+			"Download progress event received: workerID=%s infoHash=%s status=%s progress=%.2f%% speed=%dB/s peers=%d seeds=%d",
+			event.WorkerID,
+			payload.InfoHash,
+			payload.Status,
+			payload.Progress,
+			payload.DownloadSpeed,
+			payload.Peers,
+			payload.Seeds,
+		)
+	}
 	if p.redisManager == nil || p.redisManager.Client() == nil {
+		if p.shouldLogProgress("redis-unavailable:" + payload.InfoHash) {
+			p.loggerManager.Logger().Warnf("Download progress event skipped: Redis unavailable, infoHash=%s", payload.InfoHash)
+		}
 		return nil
 	}
 	data, err := json.Marshal(payload)
@@ -360,8 +380,30 @@ func (p *WorkerEventProcessor) handleDownloadProgress(ctx context.Context, event
 	}
 	if err := p.redisManager.Client().Set(ctx, cache.TorrentProgressKey(payload.InfoHash), data, downloadProgressTTL).Err(); err != nil {
 		p.loggerManager.Logger().Warnf("failed to cache download progress: %v", err)
+	} else if p.shouldLogDownloadProgressCache(payload.InfoHash) {
+		p.loggerManager.Logger().Infof("Download progress cached in Redis: key=%s ttl=%s", cache.TorrentProgressKey(payload.InfoHash), downloadProgressTTL)
 	}
 	return nil
+}
+
+func (p *WorkerEventProcessor) shouldLogDownloadProgress(infoHash string) bool {
+	return p.shouldLogProgress("received:" + infoHash)
+}
+
+func (p *WorkerEventProcessor) shouldLogDownloadProgressCache(infoHash string) bool {
+	return p.shouldLogProgress("cached:" + infoHash)
+}
+
+func (p *WorkerEventProcessor) shouldLogProgress(key string) bool {
+	p.progressLogMu.Lock()
+	defer p.progressLogMu.Unlock()
+	now := time.Now()
+	last, ok := p.progressLogAt[key]
+	if ok && now.Sub(last) < 10*time.Second {
+		return false
+	}
+	p.progressLogAt[key] = now
+	return true
 }
 
 func (p *WorkerEventProcessor) handleDownloadCompleted(ctx context.Context, event *eventTypes.WorkerEvent) error {
