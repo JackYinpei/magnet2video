@@ -52,6 +52,67 @@ docker compose up -d
 docker compose logs -f app
 ```
 
+## 4. MySQL 1045 on startup
+
+如果 app 日志里出现类似:
+
+```text
+Access denied for user 'root'@'172.x.x.x' (using password: YES)
+```
+
+说明 app 容器已经连到了 MySQL，但 MySQL 不允许这个账号从 app 容器的地址登录。
+旧 compose 让 app 使用 `root` 连库，MySQL 的 root 账号通常只适合本机维护；
+现在的 compose 改为使用专用账号 `DB_USER`/`DB_PASSWORD`。
+
+如果是刚部署、没有需要保留的数据，最简单:
+
+```bash
+cd /opt/magnet2video
+nano .env
+# 确认/新增:
+#   MYSQL_ROOT_PASSWORD=<root维护密码>
+#   DB_USER=magnet2video
+#   DB_PASSWORD=<app数据库密码>
+#   DB_NAME=magnet2video
+
+docker compose down -v
+docker compose pull
+docker compose up -d
+docker compose logs -f app
+```
+
+`docker compose down -v` 会删除 MySQL/Redis/RabbitMQ 数据卷；已经有数据时不要用。
+要保留数据，就进 MySQL 手动创建 app 用户:
+
+```bash
+cd /opt/magnet2video
+docker exec -it magnet2video-mysql mysql -uroot -p
+```
+
+然后在 MySQL 里执行:
+
+```sql
+CREATE DATABASE IF NOT EXISTS `magnet2video`;
+CREATE USER IF NOT EXISTS 'magnet2video'@'%' IDENTIFIED BY '<DB_PASSWORD里的值>';
+GRANT ALL PRIVILEGES ON `magnet2video`.* TO 'magnet2video'@'%';
+FLUSH PRIVILEGES;
+```
+
+再确认 `/opt/magnet2video/.env` 里:
+
+```dotenv
+DB_USER=magnet2video
+DB_PASSWORD=<上面同一个密码>
+DB_NAME=magnet2video
+```
+
+最后重启:
+
+```bash
+docker compose up -d
+docker compose logs -f app
+```
+
 如果 `RABBITMQ_DEFAULT_*` 没在第一次启动前就在 `.env` 里，那这些 env 变量
 对已经存在的数据卷无效，需要手动加 vhost / user：
 
@@ -63,7 +124,7 @@ docker exec magnet2video-rabbitmq rabbitmqctl set_user_tags worker management
 docker exec magnet2video-rabbitmq rabbitmqctl delete_user guest
 ```
 
-## 4. Worker (your laptop or any machine)
+## 5. Worker (your laptop or any machine)
 
 ```bash
 mkdir -p ~/magnet2video-worker/{.logs,download}
@@ -81,7 +142,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-## 5. Verifying
+## 6. Verifying
 
 - `https://<server>:8080` — web UI
 - `https://<server>:15672` — RabbitMQ management (login with worker user)
