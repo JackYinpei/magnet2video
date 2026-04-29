@@ -17,6 +17,7 @@ import (
 
 // RabbitMQProducer sends messages to RabbitMQ
 type RabbitMQProducer struct {
+	mu       sync.Mutex
 	conn     *amqp.Connection
 	channel  *amqp.Channel
 	exchange string
@@ -66,6 +67,9 @@ func NewRabbitMQProducer(config *configs.Config) (*RabbitMQProducer, error) {
 
 // Send sends a message to the specified topic (routing key)
 func (p *RabbitMQProducer) Send(ctx context.Context, topic string, key, value []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	// Ensure queue exists
 	_, err := p.channel.QueueDeclare(
 		topic, // name
