@@ -69,6 +69,15 @@ func runWorker(cfg *configs.Config) {
 		defer cuConsumer.Close()
 	}
 
+	// Re-track any torrents that were active before this worker started (e.g. after restart).
+	// Without this, torrents that finished downloading before the restart would never emit
+	// download.completed, and transcoding / cloud-upload would never be triggered.
+	if client := container.TorrentManager.Client(); client != nil {
+		for _, h := range client.ListInfoHashes() {
+			container.ProgressReporter.TrackTorrent(h)
+		}
+	}
+
 	// Background loops
 	go container.HeartbeatPublisher.Start(ctx)
 	go container.ProgressReporter.Start(ctx)

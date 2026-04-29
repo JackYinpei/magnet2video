@@ -736,6 +736,17 @@ func (c *Client) HasTorrent(infoHash string) bool {
 	return exists
 }
 
+// ListInfoHashes returns all infoHashes currently known to the client.
+func (c *Client) ListInfoHashes() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]string, 0, len(c.torrents))
+	for h := range c.torrents {
+		out = append(out, h)
+	}
+	return out
+}
+
 // isStreamableFile checks if a file is likely to be streamable in browser
 // Based on file extension and common video codecs
 func isStreamableFile(path string) bool {
