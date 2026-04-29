@@ -180,6 +180,10 @@ func (p *WorkerEventProcessor) handleTranscodeCompleted(ctx context.Context, eve
 	if err := event.DecodePayload(&payload); err != nil {
 		return err
 	}
+	log := p.loggerManager.Logger()
+	log.Infof("Transcode completed: jobID=%d torrentID=%d fileIndex=%d outputPath=%s outputSize=%d",
+		payload.JobID, payload.TorrentID, payload.FileIndex, payload.OutputPath, payload.OutputSize)
+
 	db := p.dbManager.DB()
 
 	// 1. Update job record
@@ -191,51 +195,69 @@ func (p *WorkerEventProcessor) handleTranscodeCompleted(ctx context.Context, eve
 			"output_path":  payload.OutputPath,
 			"completed_at": time.Now().Unix(),
 		}).Error; err != nil {
+		log.Errorf("Failed to update transcode job record: jobID=%d err=%v", payload.JobID, err)
 		return err
 	}
 
-	// 2. Update source file, create transcoded file entry
+	// 2. Update source file transcode status
 	var sourceFile torrentModel.TorrentFile
 	if err := db.Where("torrent_id = ? AND `index` = ?", payload.TorrentID, payload.FileIndex).First(&sourceFile).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Errorf("Failed to query source file: torrentID=%d fileIndex=%d err=%v", payload.TorrentID, payload.FileIndex, err)
 			return err
 		}
+		log.Warnf("Source file not found for transcode completed event: torrentID=%d fileIndex=%d", payload.TorrentID, payload.FileIndex)
 	} else {
-		db.Model(&sourceFile).Updates(map[string]any{
+		if err := db.Model(&sourceFile).Updates(map[string]any{
 			"transcode_status": torrentModel.TranscodeStatusCompleted,
 			"transcoded_path":  payload.OutputPath,
 			"transcode_error":  "",
-		})
+		}).Error; err != nil {
+			log.Errorf("Failed to update source file transcode status: torrentID=%d fileIndex=%d err=%v", payload.TorrentID, payload.FileIndex, err)
+			return err
+		}
 	}
 
-	var count int64
-	db.Model(&torrentModel.TorrentFile{}).Where("torrent_id = ?", payload.TorrentID).Count(&count)
-	newIndex := int(count)
+	// 3. Create transcoded file entry.
+	// Use a transaction so the Count + Create is atomic, preventing duplicate indexes
+	// if multiple transcode jobs complete concurrently.
+	var newFile torrentModel.TorrentFile
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&torrentModel.TorrentFile{}).Where("torrent_id = ?", payload.TorrentID).Count(&count).Error; err != nil {
+			return fmt.Errorf("count torrent files: %w", err)
+		}
 
-	parentPath := ""
-	if sourceFile.ID != 0 {
-		parentPath = sourceFile.Path
-	}
+		parentPath := ""
+		if sourceFile.ID != 0 {
+			parentPath = sourceFile.Path
+		}
 
-	newFile := torrentModel.TorrentFile{
-		TorrentID:    payload.TorrentID,
-		Index:        newIndex,
-		Path:         payload.OutputPath,
-		Size:         payload.OutputSize,
-		IsSelected:   true,
-		IsShareable:  false,
-		IsStreamable: true,
-		Type:         "video",
-		Source:       "transcoded",
-		ParentPath:   parentPath,
-	}
-	if err := db.Create(&newFile).Error; err != nil {
+		newFile = torrentModel.TorrentFile{
+			TorrentID:    payload.TorrentID,
+			Index:        int(count),
+			Path:         payload.OutputPath,
+			Size:         payload.OutputSize,
+			IsSelected:   true,
+			IsShareable:  false,
+			IsStreamable: true,
+			Type:         "video",
+			Source:       "transcoded",
+			ParentPath:   parentPath,
+		}
+		return tx.Create(&newFile).Error
+	}); err != nil {
+		log.Errorf("Failed to create transcoded file record: torrentID=%d outputPath=%s err=%v", payload.TorrentID, payload.OutputPath, err)
 		return err
 	}
+	log.Infof("Transcoded file record created: torrentID=%d newIndex=%d path=%s", payload.TorrentID, newFile.Index, newFile.Path)
 
-	// 3. Queue cloud upload for the transcoded file (if cloud storage is on).
+	// 4. Queue cloud upload for the transcoded file (if cloud storage is on).
 	if p.config.CloudStorageConfig.Enabled && p.queueProducer != nil {
-		p.queueCloudUpload(ctx, payload.TorrentID, payload.InfoHash, newIndex, payload.OutputPath, payload.OutputSize, true, payload.CreatorID)
+		log.Infof("Queuing cloud upload: torrentID=%d fileIndex=%d path=%s", payload.TorrentID, newFile.Index, payload.OutputPath)
+		p.queueCloudUpload(ctx, payload.TorrentID, payload.InfoHash, newFile.Index, payload.OutputPath, payload.OutputSize, true, payload.CreatorID)
+	} else {
+		log.Infof("Cloud upload skipped (disabled or no producer): torrentID=%d", payload.TorrentID)
 	}
 
 	return p.recomputeTranscodeStatus(payload.TorrentID)
