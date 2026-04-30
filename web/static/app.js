@@ -11,6 +11,12 @@ let parsedTorrent = null;
 let progressInterval = null;
 let currentUser = null;
 
+// Per-row expand state for the download list. Auto-refresh wipes the
+// rendered DOM every 3s, so we keep the expanded set + cached detail
+// outside of render so re-renders preserve them without re-fetching.
+const expandedTorrents = new Set();
+const detailCache = Object.create(null);
+
 // Admin pagination state
 let adminUsersPage = 1;
 let adminResourcesPage = 1;
@@ -746,6 +752,7 @@ function renderDownloads(torrents) {
                     ` : torrent.status === 4 ? `
                         <button class="btn btn-sm resume-btn" data-infohash="${torrent.info_hash}">继续</button>
                     ` : ''}
+                    <button class="btn btn-sm" onclick="toggleExpandTorrent('${torrent.info_hash}')">${expandedTorrents.has(torrent.info_hash) ? '收起' : '文件'}</button>
                     <button class="btn btn-sm" onclick="openImdbModal('${torrent.info_hash}', '${(torrent.imdb_id || '').replace(/'/g, "\\'")}')">IMDB</button>
                     <button class="btn btn-sm" onclick="uploadPoster('${torrent.info_hash}')">上传海报</button>
                     <button class="btn btn-sm ${v === 1 ? 'btn-info' : ''}"
@@ -771,6 +778,7 @@ function renderDownloads(torrents) {
             </div>
             ${renderTranscodeStatus(torrent)}
             ${renderCloudUploadStatus(torrent)}
+            ${expandedTorrents.has(torrent.info_hash) ? renderFilesPanel(torrent.info_hash) : ''}
         </div>
     `}).join('');
 
@@ -1049,12 +1057,149 @@ async function retryCloudUploadFile(infoHash, fileIndex, btnElement) {
             body: JSON.stringify({ info_hash: infoHash, file_index: fileIndex })
         });
         showToast(data.message || '已重新排队上传', 'success');
+        delete detailCache[infoHash];
         loadDownloads();
     } catch (error) {
         showToast(error.message || '重新上传失败', 'error');
         if (btnElement) {
             btnElement.disabled = false;
             btnElement.textContent = '重新上传';
+        }
+    }
+}
+
+// ============ 每文件操作面板 (展开种子卡片后显示) ============
+
+async function toggleExpandTorrent(infoHash) {
+    if (expandedTorrents.has(infoHash)) {
+        expandedTorrents.delete(infoHash);
+        loadDownloads();
+        return;
+    }
+    expandedTorrents.add(infoHash);
+    try {
+        detailCache[infoHash] = await apiRequest(`${TORRENT_API}/detail/${infoHash}`);
+    } catch (e) {
+        expandedTorrents.delete(infoHash);
+        showToast(e.message || '加载文件详情失败', 'error');
+    }
+    loadDownloads();
+}
+
+async function refreshTorrentDetail(infoHash) {
+    delete detailCache[infoHash];
+    try {
+        detailCache[infoHash] = await apiRequest(`${TORRENT_API}/detail/${infoHash}`);
+    } catch (e) {
+        showToast(e.message || '刷新失败', 'error');
+    }
+    loadDownloads();
+}
+
+function renderFilesPanel(infoHash) {
+    const detail = detailCache[infoHash];
+    if (!detail) {
+        return `<div class="files-panel" style="margin-top:8px;padding:8px;border-top:1px solid #eee;color:#888;">加载文件详情中...</div>`;
+    }
+    const files = detail.files || [];
+    if (files.length === 0) {
+        return `<div class="files-panel" style="margin-top:8px;padding:8px;border-top:1px solid #eee;color:#888;">该任务暂无文件记录</div>`;
+    }
+    const rows = files.map(f => renderFileRow(infoHash, f)).join('');
+    return `
+        <div class="files-panel" style="margin-top:8px;padding:8px;border-top:1px solid #eee;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:0.9em;">
+                <strong>文件列表 (${files.length})</strong>
+                <button class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:0.8em;"
+                        onclick="refreshTorrentDetail('${infoHash}')">🔄 刷新</button>
+                <span style="color:#888;font-size:0.85em;">每文件可重新触发转码 / 重新上传</span>
+            </div>
+            <table style="width:100%;font-size:0.85em;border-collapse:collapse;">
+                <thead>
+                    <tr style="text-align:left;color:#666;border-bottom:1px solid #eee;">
+                        <th style="padding:4px 6px;">文件</th>
+                        <th style="padding:4px 6px;width:90px;">大小</th>
+                        <th style="padding:4px 6px;width:120px;">转码</th>
+                        <th style="padding:4px 6px;width:120px;">云上传</th>
+                        <th style="padding:4px 6px;width:200px;">操作</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+    `;
+}
+
+function renderFileRow(infoHash, f) {
+    const sourceBadge = f.source === 'transcoded'
+        ? '<span class="transcode-badge completed" style="margin-left:4px;font-size:0.75em;">转码后</span>'
+        : f.source === 'extracted'
+            ? '<span class="transcode-badge none" style="margin-left:4px;font-size:0.75em;">字幕</span>'
+            : '';
+    const tStatus = f.transcode_status || 0;
+    const tText = tStatus > 0 ? getTranscodeText(tStatus, 2) : '—';
+    const tClass = tStatus > 0 ? getTranscodeClass(tStatus) : 'none';
+    const cStatus = f.cloud_status || 0;
+    const cText = cStatus > 0 ? getCloudUploadText(cStatus) : '—';
+    const cClass = cStatus > 0 ? getCloudUploadClass(cStatus) : 'none';
+
+    // Transcode controls only apply to original video files. Force=true bypasses
+    // mid-state guards on the server. Default Force=false skips Pending/Processing.
+    const canRequeueTranscode = f.type === 'video' && (f.source === 'original' || !f.source);
+    // Cloud retry applies to any file that has been queued at all OR that we
+    // want to push fresh. Use force=false by default; if status is None, the
+    // server will queue it from scratch.
+    const canRetryCloud = true;
+
+    return `
+        <tr style="border-bottom:1px solid #f5f5f5;">
+            <td style="padding:4px 6px;word-break:break-all;">${escapeHtml(f.path || '')}${sourceBadge}</td>
+            <td style="padding:4px 6px;">${f.size_readable || formatSize(f.size || 0)}</td>
+            <td style="padding:4px 6px;"><span class="transcode-badge ${tClass}">${tText}</span></td>
+            <td style="padding:4px 6px;"><span class="transcode-badge ${cClass}">${cText}</span></td>
+            <td style="padding:4px 6px;display:flex;flex-wrap:wrap;gap:4px;">
+                ${canRequeueTranscode ? `<button class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:0.8em;"
+                        onclick="requeueTranscodeFile('${infoHash}', ${f.index}, false, this)">重新转码</button>` : ''}
+                ${canRequeueTranscode ? `<button class="btn btn-sm btn-warning" style="padding:2px 8px;font-size:0.8em;"
+                        onclick="requeueTranscodeFile('${infoHash}', ${f.index}, true, this)" title="无视当前状态强制重排">强制转码</button>` : ''}
+                ${canRetryCloud ? `<button class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:0.8em;"
+                        onclick="retryCloudUploadFile('${infoHash}', ${f.index}, this)">重新上传</button>` : ''}
+            </td>
+        </tr>
+    `;
+}
+
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+async function requeueTranscodeFile(infoHash, fileIndex, force, btnElement) {
+    const verb = force ? '强制重新转码' : '重新转码';
+    if (!confirm(`确定要${verb}该文件吗？${force ? '\n注意：force=true 会无视当前 Pending/Processing 状态强制塞队列，可能与正在跑的任务并行。' : ''}`)) {
+        return;
+    }
+    try {
+        if (btnElement) {
+            btnElement.disabled = true;
+            btnElement.textContent = '排队中...';
+        }
+        const data = await apiRequest(`${TORRENT_API}/transcode/requeue`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: infoHash, file_index: fileIndex, force: !!force })
+        });
+        showToast(data.message || `已${verb}`, 'success');
+        delete detailCache[infoHash];
+        loadDownloads();
+    } catch (error) {
+        showToast(error.message || `${verb}失败`, 'error');
+        if (btnElement) {
+            btnElement.disabled = false;
+            btnElement.textContent = force ? '强制转码' : '重新转码';
         }
     }
 }
@@ -2322,6 +2467,10 @@ window.deleteUser = deleteUser;
 window.deleteAdminTorrent = deleteAdminTorrent;
 window.resetTranscode = resetTranscode;
 window.retryCloudUpload = retryCloudUpload;
+window.retryCloudUploadFile = retryCloudUploadFile;
+window.toggleExpandTorrent = toggleExpandTorrent;
+window.refreshTorrentDetail = refreshTorrentDetail;
+window.requeueTranscodeFile = requeueTranscodeFile;
 window.openImdbModal = openImdbModal;
 window.selectTmdbResult = selectTmdbResult;
 window.uploadPoster = uploadPoster;
