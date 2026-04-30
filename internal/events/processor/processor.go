@@ -218,35 +218,18 @@ func (p *WorkerEventProcessor) handleTranscodeCompleted(ctx context.Context, eve
 		}
 	}
 
-	// 3. Create transcoded file entry.
-	// Use a transaction so the Count + Create is atomic, preventing duplicate indexes
-	// if multiple transcode jobs complete concurrently.
+	// 3. Create transcoded file entry. We can't rely on Count + Create being safe
+	// alone — under MySQL REPEATABLE READ two concurrent completions can read the
+	// same Count snapshot. The DB-level unique index on (torrent_id, index)
+	// (installed in migration.go) is the real guard; here we retry on conflict
+	// using MAX(index)+1 instead of Count, so a clash just bumps to the next free
+	// slot. Bounded retries cap the worst case.
+	parentPath := ""
+	if sourceFile.ID != 0 {
+		parentPath = sourceFile.Path
+	}
 	var newFile torrentModel.TorrentFile
-	if err := db.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&torrentModel.TorrentFile{}).Where("torrent_id = ?", payload.TorrentID).Count(&count).Error; err != nil {
-			return fmt.Errorf("count torrent files: %w", err)
-		}
-
-		parentPath := ""
-		if sourceFile.ID != 0 {
-			parentPath = sourceFile.Path
-		}
-
-		newFile = torrentModel.TorrentFile{
-			TorrentID:    payload.TorrentID,
-			Index:        int(count),
-			Path:         payload.OutputPath,
-			Size:         payload.OutputSize,
-			IsSelected:   true,
-			IsShareable:  false,
-			IsStreamable: true,
-			Type:         "video",
-			Source:       "transcoded",
-			ParentPath:   parentPath,
-		}
-		return tx.Create(&newFile).Error
-	}); err != nil {
+	if err := createTranscodedFileWithRetry(db, &newFile, payload.TorrentID, payload.OutputPath, payload.OutputSize, parentPath); err != nil {
 		log.Errorf("Failed to create transcoded file record: torrentID=%d outputPath=%s err=%v", payload.TorrentID, payload.OutputPath, err)
 		return err
 	}
@@ -545,6 +528,51 @@ func (p *WorkerEventProcessor) queueCloudUpload(ctx context.Context, torrentID i
 	}
 
 	log.Infof("queued cloud upload: torrentID=%d fileIndex=%d cloudPath=%s", torrentID, fileIndex, cloudPath)
+}
+
+// createTranscodedFileWithRetry inserts a new TorrentFile row for a transcoded
+// output. The Index is computed as MAX(index)+1 inside a transaction; if the
+// DB-level unique constraint rejects the insert (because a concurrent completion
+// just claimed the same index), we re-query MAX and try again. Capped retries.
+func createTranscodedFileWithRetry(db *gorm.DB, newFile *torrentModel.TorrentFile, torrentID int64, outputPath string, outputSize int64, parentPath string) error {
+	const maxAttempts = 5
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err := db.Transaction(func(tx *gorm.DB) error {
+			var maxIdx struct{ V *int }
+			if err := tx.Raw("SELECT MAX(`index`) AS v FROM torrent_files WHERE torrent_id = ?", torrentID).Scan(&maxIdx).Error; err != nil {
+				return fmt.Errorf("max(index): %w", err)
+			}
+			next := 0
+			if maxIdx.V != nil {
+				next = *maxIdx.V + 1
+			}
+			*newFile = torrentModel.TorrentFile{
+				TorrentID:    torrentID,
+				Index:        next,
+				Path:         outputPath,
+				Size:         outputSize,
+				IsSelected:   true,
+				IsShareable:  false,
+				IsStreamable: true,
+				Type:         "video",
+				Source:       "transcoded",
+				ParentPath:   parentPath,
+			}
+			return tx.Create(newFile).Error
+		})
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		// Unique-violation error strings vary across drivers; match the common
+		// substrings and retry. Anything else is a real failure.
+		es := err.Error()
+		if !strings.Contains(es, "Duplicate") && !strings.Contains(es, "UNIQUE") && !strings.Contains(es, "uniq_torrent_file_torrent_id_index") {
+			return err
+		}
+	}
+	return fmt.Errorf("createTranscodedFileWithRetry exhausted %d attempts: %w", maxAttempts, lastErr)
 }
 
 // recomputeTranscodeStatus aggregates per-file transcode status into the torrent record.
