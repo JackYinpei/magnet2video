@@ -8,10 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -37,10 +35,14 @@ type TranscodeServiceImpl struct {
 	dbManager      db.DatabaseManager
 	torrentManager torrent.TorrentManager
 	queueProducer  queue.Producer
-	ffmpeg         *ffmpeg.FFmpeg
 }
 
-// NewTranscodeService creates transcode service implementation
+// NewTranscodeService creates transcode service implementation.
+//
+// The service used to embed an *ffmpeg.FFmpeg client to probe files inline and
+// decide remux vs transcode, but the worker is the only side that actually
+// owns the on-disk files in split deployment. The server now sends a job with
+// Operation="" and the worker probes locally — see TranscodeHandler.resolveOperation.
 func NewTranscodeService(
 	config *configs.Config,
 	loggerManager logger.LoggerManager,
@@ -54,10 +56,6 @@ func NewTranscodeService(
 		dbManager:      dbManager,
 		torrentManager: torrentManager,
 		queueProducer:  queueProducer,
-		ffmpeg: ffmpeg.New(
-			config.TranscodeConfig.FFmpegPath,
-			config.TranscodeConfig.FFprobePath,
-		),
 	}
 }
 
@@ -81,11 +79,15 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 		return nil
 	}
 
+	// In split deployment the server has neither the worker's download/ dir
+	// nor an ffmpeg binary, so we MUST NOT os.Stat or Probe here. The worker's
+	// TranscodeHandler.resolveOperation probes locally when Operation is empty
+	// and the CloudUploadHandler stat/opens the file itself. We just dispatch
+	// jobs based on filename heuristics + DB metadata.
 	downloadDir := ts.torrentManager.Client().GetDownloadDir()
 	var needsTranscode bool
 	var totalTranscode int
 
-	// Check each file for transcoding needs
 	for i, file := range torrentRecord.Files {
 		if !file.IsSelected {
 			continue
@@ -101,45 +103,22 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 			continue
 		}
 
-		// Check if file needs transcoding
+		// inputPath is constructed but server never reads it — it is the worker's
+		// view of the file, passed verbatim through the queue. Server and worker
+		// are expected to share the same effective downloadDir (relative to the
+		// process working dir). If they don't, that's an ops-level config issue,
+		// not something this code can fix.
+		inputPath := filepath.Join(downloadDir, file.Path)
+
 		if ffmpeg.NeedsTranscoding(file.Path) {
-			// Get full path - file.Path might not include torrent directory
-			// Try both: with and without torrent name directory
-			inputPath := filepath.Join(downloadDir, file.Path)
-
-			// Check if file exists at direct path
-			if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-				// Try with torrent name as directory prefix
-				inputPath = filepath.Join(downloadDir, torrentRecord.Name, filepath.Base(file.Path))
-				if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-					ts.loggerManager.Logger().Warnf("file not found, skipping transcode check: %s", file.Path)
-					continue
-				}
-			}
-
 			needsTranscode = true
 			totalTranscode++
 
 			outputPath := ffmpeg.GenerateOutputPath(inputPath)
 
-			// Probe file to determine transcode type (2 minute timeout for large files)
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-			videoInfo, err := ts.ffmpeg.Probe(ctx, inputPath)
-			cancel()
-
-			if err != nil {
-				ts.loggerManager.Logger().Warnf("failed to probe file %s: %v", inputPath, err)
-				continue
-			}
-
-			// Determine operation type
-			transcodeType := ts.ffmpeg.DetermineTranscodeType(videoInfo, inputPath)
-			operation := types.OperationTranscode
-			if transcodeType == ffmpeg.TranscodeTypeRemux {
-				operation = types.OperationRemux
-			}
-
-			// Create transcode job in database
+			// Operation="" tells the worker to probe and decide remux vs transcode.
+			// InputCodec / Duration are filled in by the completion event when the
+			// worker is done.
 			job := &transcodeModel.TranscodeJob{
 				TorrentID:     torrentID,
 				InfoHash:      torrentRecord.InfoHash,
@@ -147,10 +126,8 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 				OutputPath:    outputPath,
 				FileIndex:     i,
 				Status:        transcodeModel.JobStatusPending,
-				InputCodec:    videoInfo.Codec,
 				OutputCodec:   "h264",
-				TranscodeType: operation,
-				Duration:      int64(videoInfo.Duration * 1000),
+				TranscodeType: "", // worker decides
 				CreatorID:     torrentRecord.CreatorID,
 			}
 
@@ -159,9 +136,8 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 				continue
 			}
 
-			// Outbox-style: send the message FIRST. Only on success do we mark the
-			// file Pending. If sending fails we leave the file row alone (so a later
-			// retry can pick it up) and mark the job Failed so it doesn't dangle.
+			// Outbox: send first, then mark file Pending. On send failure mark the
+			// job Failed and leave the file row alone so a later retry picks it up.
 			msg := types.TranscodeMessage{
 				JobID:      job.ID,
 				TorrentID:  torrentID,
@@ -169,8 +145,7 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 				FileIndex:  i,
 				InputPath:  inputPath,
 				OutputPath: outputPath,
-				InputCodec: videoInfo.Codec,
-				Operation:  operation,
+				Operation:  "", // worker resolves locally
 				Priority:   5,
 				CreatorID:  torrentRecord.CreatorID,
 				Preset:     ts.config.TranscodeConfig.DefaultPreset,
@@ -188,7 +163,8 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 				continue
 			}
 
-			// Send succeeded → mark file Pending.
+			ts.loggerManager.Logger().Infof("Queued transcode job: jobID=%d torrentID=%d fileIndex=%d inputPath=%s", job.ID, torrentID, i, inputPath)
+
 			if err := ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
 				Where("torrent_id = ? AND `index` = ?", torrentID, i).
 				Updates(map[string]interface{}{
@@ -197,25 +173,16 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 				}).Error; err != nil {
 				ts.loggerManager.Logger().Errorf("failed to mark file Pending after enqueue: torrentID=%d fileIndex=%d err=%v", torrentID, i, err)
 			}
-		} else {
-			// File doesn't need transcoding, queue for cloud upload directly if enabled
-			if ts.config.CloudStorageConfig.Enabled {
-				inputPath := filepath.Join(downloadDir, file.Path)
-				// Check if file exists at direct path
-				if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-					// Try with torrent name as directory prefix
-					inputPath = filepath.Join(downloadDir, torrentRecord.Name, filepath.Base(file.Path))
-				}
+			continue
+		}
 
-				fileInfo, err := os.Stat(inputPath)
-				if err == nil {
-					ts.queueCloudUpload(torrentID, torrentRecord.InfoHash, i, inputPath, fileInfo.Size(), false, torrentRecord.CreatorID, &torrentRecord)
-				}
-			}
+		// Doesn't need transcoding → straight to cloud if enabled. Use the size
+		// already in DB (worker wrote it on download.completed) instead of stat.
+		if ts.config.CloudStorageConfig.Enabled {
+			ts.queueCloudUpload(torrentID, torrentRecord.InfoHash, i, inputPath, file.Size, false, torrentRecord.CreatorID, &torrentRecord)
 		}
 	}
 
-	// Update torrent record aggregates
 	if needsTranscode {
 		ts.dbManager.DB().Model(&torrentRecord).Updates(map[string]interface{}{
 			"transcode_status":   torrentModel.TranscodeStatusPending,
@@ -440,8 +407,10 @@ func (ts *TranscodeServiceImpl) TriggerTranscodeCheck(torrentID int64) {
 //   - Default skip: TranscodeStatus == Pending or Processing (worker may still
 //     be doing it). Pass force=true to override.
 //   - Always skip: TranscodeStatus == Completed (no point — nothing to redo)
-//   - Always skip: TranscodeStatus == None — nothing to reset; CheckAndQueueTranscode
-//     handles fresh files itself.
+//   - Default skip: TranscodeStatus == None — CheckAndQueueTranscode handles
+//     fresh files itself. Pass force=true to also reset None, which is the
+//     escape hatch for "the file should have been queued by now but wasn't"
+//     (e.g. the prior server build silently dropped the dispatch).
 //
 // Verifies caller owns the torrent.
 func (ts *TranscodeServiceImpl) RequeueTranscode(c *gin.Context, req *dto.RequeueTranscodeRequest, callerUserID int64) (*vo.RequeueTranscodeResponse, error) {
@@ -481,8 +450,16 @@ func (ts *TranscodeServiceImpl) RequeueTranscode(c *gin.Context, req *dto.Requeu
 			if req.Force {
 				resetIDs = append(resetIDs, f.ID)
 			}
-		case torrentModel.TranscodeStatusCompleted, torrentModel.TranscodeStatusNone:
-			// skip
+		case torrentModel.TranscodeStatusNone:
+			// Default: leave None alone — CheckAndQueueTranscode handles fresh files.
+			// With force=true, include them in the reset so CheckAndQueueTranscode is
+			// guaranteed to revisit them this round (the per-file Pending-skip guard
+			// would otherwise short-circuit if a previous run already moved them).
+			if req.Force {
+				resetIDs = append(resetIDs, f.ID)
+			}
+		case torrentModel.TranscodeStatusCompleted:
+			// skip — nothing to redo
 		}
 	}
 
@@ -517,8 +494,12 @@ func (ts *TranscodeServiceImpl) RequeueTranscode(c *gin.Context, req *dto.Requeu
 			torrentRecord.ID, torrentRecord.Status)
 	}
 
-	ts.loggerManager.Logger().Infof("RequeueTranscode: torrentID=%d resetCount=%d force=%v fileIndex=%v",
-		torrentRecord.ID, len(resetIDs), req.Force, req.FileIndex)
+	fileIndexLog := "all"
+	if req.FileIndex != nil {
+		fileIndexLog = fmt.Sprintf("%d", *req.FileIndex)
+	}
+	ts.loggerManager.Logger().Infof("RequeueTranscode: torrentID=%d resetCount=%d force=%v fileIndex=%s",
+		torrentRecord.ID, len(resetIDs), req.Force, fileIndexLog)
 
 	return &vo.RequeueTranscodeResponse{
 		InfoHash:      req.InfoHash,
