@@ -17,89 +17,96 @@ import (
 
 // RabbitMQProducer sends messages to RabbitMQ
 type RabbitMQProducer struct {
-	mu       sync.Mutex
-	conn     *amqp.Connection
-	channel  *amqp.Channel
-	exchange string
+	mu           sync.Mutex
+	conn         *amqp.Connection
+	channel      *amqp.Channel
+	url          string
+	exchange     string
+	exchangeType string
+	closed       bool // set true by Close(); stops reconnect attempts
 }
 
 // NewRabbitMQProducer creates a new RabbitMQ producer
 func NewRabbitMQProducer(config *configs.Config) (*RabbitMQProducer, error) {
-	conn, err := amqp.Dial(config.QueueConfig.RabbitMQ.URL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("failed to open channel: %w", err)
-	}
-
 	exchange := config.QueueConfig.RabbitMQ.Exchange
 	exchangeType := config.QueueConfig.RabbitMQ.ExchangeType
 	if exchangeType == "" {
 		exchangeType = "direct"
 	}
 
-	// Declare exchange
-	err = ch.ExchangeDeclare(
-		exchange,     // name
-		exchangeType, // type
-		true,         // durable
-		false,        // auto-deleted
-		false,        // internal
-		false,        // no-wait
-		nil,          // arguments
-	)
-	if err != nil {
-		ch.Close()
-		conn.Close()
-		return nil, fmt.Errorf("failed to declare exchange: %w", err)
+	p := &RabbitMQProducer{
+		url:          config.QueueConfig.RabbitMQ.URL,
+		exchange:     exchange,
+		exchangeType: exchangeType,
 	}
-
-	return &RabbitMQProducer{
-		conn:     conn,
-		channel:  ch,
-		exchange: exchange,
-	}, nil
+	if err := p.dial(); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
-// Send sends a message to the specified topic (routing key)
-func (p *RabbitMQProducer) Send(ctx context.Context, topic string, key, value []byte) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Ensure queue exists
-	_, err := p.channel.QueueDeclare(
-		topic, // name
-		true,  // durable
-		false, // delete when unused
-		false, // exclusive
-		false, // no-wait
-		nil,   // arguments
-	)
+// dial opens a new connection + channel and declares the exchange.
+// Caller must hold p.mu (or be in the constructor where no concurrency exists).
+func (p *RabbitMQProducer) dial() error {
+	conn, err := amqp.Dial(p.url)
 	if err != nil {
+		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("failed to open channel: %w", err)
+	}
+
+	if err := ch.ExchangeDeclare(p.exchange, p.exchangeType, true, false, false, false, nil); err != nil {
+		ch.Close()
+		conn.Close()
+		return fmt.Errorf("failed to declare exchange: %w", err)
+	}
+
+	p.conn = conn
+	p.channel = ch
+	return nil
+}
+
+// reconnect tears down the current channel/connection and re-dials.
+// Caller must hold p.mu.
+func (p *RabbitMQProducer) reconnect() error {
+	if p.channel != nil {
+		p.channel.Close()
+		p.channel = nil
+	}
+	if p.conn != nil {
+		p.conn.Close()
+		p.conn = nil
+	}
+	return p.dial()
+}
+
+// isConnAlive returns true if the underlying connection looks healthy.
+// Caller must hold p.mu.
+func (p *RabbitMQProducer) isConnAlive() bool {
+	return p.conn != nil && !p.conn.IsClosed() && p.channel != nil
+}
+
+// publishOnce performs a single declare/bind/publish using the current channel.
+// Caller must hold p.mu.
+func (p *RabbitMQProducer) publishOnce(ctx context.Context, topic string, value []byte) error {
+	if !p.isConnAlive() {
+		return fmt.Errorf("rabbitmq channel not open")
+	}
+
+	if _, err := p.channel.QueueDeclare(topic, true, false, false, false, nil); err != nil {
 		return fmt.Errorf("failed to declare queue: %w", err)
 	}
 
-	// Bind queue to exchange
-	err = p.channel.QueueBind(
-		topic,      // queue name
-		topic,      // routing key
-		p.exchange, // exchange
-		false,
-		nil,
-	)
-	if err != nil {
+	if err := p.channel.QueueBind(topic, topic, p.exchange, false, nil); err != nil {
 		return fmt.Errorf("failed to bind queue: %w", err)
 	}
 
 	return p.channel.PublishWithContext(ctx,
-		p.exchange, // exchange
-		topic,      // routing key
-		false,      // mandatory
-		false,      // immediate
+		p.exchange, topic, false, false,
 		amqp.Publishing{
 			ContentType:  "application/json",
 			Body:         value,
@@ -108,13 +115,43 @@ func (p *RabbitMQProducer) Send(ctx context.Context, topic string, key, value []
 		})
 }
 
+// Send sends a message to the specified topic (routing key).
+// On any failure suggesting the channel is dead, it reconnects once and retries.
+func (p *RabbitMQProducer) Send(ctx context.Context, topic string, key, value []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return fmt.Errorf("rabbitmq producer closed")
+	}
+
+	err := p.publishOnce(ctx, topic, value)
+	if err == nil {
+		return nil
+	}
+
+	// Any publish error invalidates the channel in amqp091 — retry once after a fresh dial.
+	log.Printf("RabbitMQ publish to %s failed: %v — reconnecting and retrying once", topic, err)
+	if reErr := p.reconnect(); reErr != nil {
+		return fmt.Errorf("publish failed (%v); reconnect also failed: %w", err, reErr)
+	}
+	return p.publishOnce(ctx, topic, value)
+}
+
 // Close closes the producer connection
 func (p *RabbitMQProducer) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.closed = true
 	if p.channel != nil {
 		p.channel.Close()
+		p.channel = nil
 	}
 	if p.conn != nil {
-		return p.conn.Close()
+		err := p.conn.Close()
+		p.conn = nil
+		return err
 	}
 	return nil
 }
