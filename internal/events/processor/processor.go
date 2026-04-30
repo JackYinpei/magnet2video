@@ -484,8 +484,17 @@ func (p *WorkerEventProcessor) handlePosterCandidate(ctx context.Context, event 
 
 // ---- helpers ----
 
-// queueCloudUpload enqueues a cloud-upload job message and updates the pending counter.
+// queueCloudUpload enqueues a cloud-upload job message.
+//
+// Outbox-style ordering: send the message FIRST; only on send-success write
+// Pending to the file row. If sending fails the file's cloud status is left
+// untouched (stays None / Failed / whatever it was), which lets a later retry
+// pick it up rather than stranding it in Pending forever.
+//
+// total_cloud_upload is NOT incremented here — that aggregate is now derived
+// in recomputeCloudStatus from per-file rows, so it can't drift on retries.
 func (p *WorkerEventProcessor) queueCloudUpload(ctx context.Context, torrentID int64, infoHash string, fileIndex int, localPath string, fileSize int64, isTranscoded bool, creatorID int64) {
+	log := p.loggerManager.Logger()
 	pathPrefix := p.config.CloudStorageConfig.PathPrefix
 	if pathPrefix == "" {
 		pathPrefix = "torrents"
@@ -494,14 +503,6 @@ func (p *WorkerEventProcessor) queueCloudUpload(ctx context.Context, torrentID i
 	cloudPath := fmt.Sprintf("%s/%s/%s", pathPrefix, infoHash, fileName)
 
 	contentType := guessContentType(localPath)
-
-	db := p.dbManager.DB()
-	db.Model(&torrentModel.TorrentFile{}).
-		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
-		Update("cloud_upload_status", torrentModel.CloudUploadStatusPending)
-	db.Model(&torrentModel.Torrent{}).
-		Where("id = ?", torrentID).
-		UpdateColumn("total_cloud_upload", gorm.Expr("total_cloud_upload + ?", 1))
 
 	msg := cloudTypes.CloudUploadMessage{
 		TorrentID:     torrentID,
@@ -517,15 +518,33 @@ func (p *WorkerEventProcessor) queueCloudUpload(ctx context.Context, torrentID i
 	}
 	msgBytes, err := json.Marshal(msg)
 	if err != nil {
-		p.loggerManager.Logger().Errorf("marshal cloud upload message: %v", err)
+		log.Errorf("marshal cloud upload message: torrentID=%d fileIndex=%d err=%v", torrentID, fileIndex, err)
 		return
 	}
+
 	if err := p.queueProducer.Send(ctx, cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
-		p.loggerManager.Logger().Errorf("send cloud upload message: %v", err)
-	} else {
-		p.loggerManager.Logger().Infof("queued cloud upload: torrentID=%d, fileIndex=%d, cloudPath=%s",
-			torrentID, fileIndex, cloudPath)
+		log.Errorf("send cloud upload message failed (status untouched, retry safe): torrentID=%d fileIndex=%d err=%v",
+			torrentID, fileIndex, err)
+		return
 	}
+
+	// Send succeeded → mark file Pending and recompute the aggregate.
+	if err := p.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Updates(map[string]any{
+			"cloud_upload_status": torrentModel.CloudUploadStatusPending,
+			"cloud_upload_error":  "",
+		}).Error; err != nil {
+		log.Errorf("update file cloud_upload_status=Pending after enqueue: torrentID=%d fileIndex=%d err=%v",
+			torrentID, fileIndex, err)
+		// Message is already in the queue; aggregate will catch up via recompute.
+	}
+
+	if err := p.recomputeCloudStatus(torrentID); err != nil {
+		log.Warnf("recomputeCloudStatus after enqueue failed: torrentID=%d err=%v", torrentID, err)
+	}
+
+	log.Infof("queued cloud upload: torrentID=%d fileIndex=%d cloudPath=%s", torrentID, fileIndex, cloudPath)
 }
 
 // recomputeTranscodeStatus aggregates per-file transcode status into the torrent record.

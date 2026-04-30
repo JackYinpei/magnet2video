@@ -30,4 +30,10 @@ type TranscodeService interface {
 
 	// CancelTranscode cancels a pending or processing transcode job
 	CancelTranscode(c *gin.Context, jobID int64) (*vo.CancelTranscodeResponse, error)
+
+	// RequeueTranscode resets the transcode state for a torrent (or one file)
+	// and re-runs CheckAndQueueTranscode. Verifies the caller is the creator.
+	// Pass FileIndex=nil for whole-torrent requeue. Force=true also resets files
+	// in Pending/Processing state.
+	RequeueTranscode(c *gin.Context, req *dto.RequeueTranscodeRequest, callerUserID int64) (*vo.RequeueTranscodeResponse, error)
 }

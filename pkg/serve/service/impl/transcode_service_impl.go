@@ -159,15 +159,9 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 				continue
 			}
 
-			// Update file status to pending in DB
-			ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
-				Where("torrent_id = ? AND `index` = ?", torrentID, i).
-				Updates(map[string]interface{}{
-					"transcode_status": torrentModel.TranscodeStatusPending,
-					"transcode_error":  "",
-				})
-
-			// Send message to Kafka
+			// Outbox-style: send the message FIRST. Only on success do we mark the
+			// file Pending. If sending fails we leave the file row alone (so a later
+			// retry can pick it up) and mark the job Failed so it doesn't dangle.
 			msg := types.TranscodeMessage{
 				JobID:      job.ID,
 				TorrentID:  torrentID,
@@ -185,17 +179,23 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 
 			msgBytes, _ := json.Marshal(msg)
 			if err := ts.queueProducer.Send(context.Background(), types.TopicTranscodeJobs, nil, msgBytes); err != nil {
-				ts.loggerManager.Logger().Errorf("failed to send transcode message: %v", err)
-				// Update job status to failed
+				ts.loggerManager.Logger().Errorf("failed to send transcode message (file status untouched, retry safe): jobID=%d fileIndex=%d err=%v", job.ID, i, err)
 				ts.dbManager.DB().Model(&transcodeModel.TranscodeJob{}).Where("id = ?", job.ID).
-					Update("status", transcodeModel.JobStatusFailed)
-				// Update file status to failed
-				ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
-					Where("torrent_id = ? AND `index` = ?", torrentID, i).
 					Updates(map[string]interface{}{
-						"transcode_status": torrentModel.TranscodeStatusFailed,
-						"transcode_error":  "failed to queue transcode job",
+						"status":        transcodeModel.JobStatusFailed,
+						"error_message": "failed to queue transcode job",
 					})
+				continue
+			}
+
+			// Send succeeded → mark file Pending.
+			if err := ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+				Where("torrent_id = ? AND `index` = ?", torrentID, i).
+				Updates(map[string]interface{}{
+					"transcode_status": torrentModel.TranscodeStatusPending,
+					"transcode_error":  "",
+				}).Error; err != nil {
+				ts.loggerManager.Logger().Errorf("failed to mark file Pending after enqueue: torrentID=%d fileIndex=%d err=%v", torrentID, i, err)
 			}
 		} else {
 			// File doesn't need transcoding, queue for cloud upload directly if enabled
@@ -340,19 +340,7 @@ func (ts *TranscodeServiceImpl) RetryTranscode(c *gin.Context, req *dto.RetryTra
 		return nil, err
 	}
 
-	// Update torrent file status
-	ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
-		Where("torrent_id = ? AND `index` = ?", oldJob.TorrentID, oldJob.FileIndex).
-		Updates(map[string]interface{}{
-			"transcode_status": torrentModel.TranscodeStatusPending,
-			"transcode_error":  "",
-		})
-	
-	ts.dbManager.DB().Model(&torrentModel.Torrent{}).
-		Where("id = ?", oldJob.TorrentID).
-		Update("transcode_status", torrentModel.TranscodeStatusPending)
-
-	// Send message to Kafka
+	// Outbox-style: send first; only on success update DB statuses.
 	msg := types.TranscodeMessage{
 		JobID:      newJob.ID,
 		TorrentID:  newJob.TorrentID,
@@ -370,9 +358,27 @@ func (ts *TranscodeServiceImpl) RetryTranscode(c *gin.Context, req *dto.RetryTra
 
 	msgBytes, _ := json.Marshal(msg)
 	if err := ts.queueProducer.Send(context.Background(), types.TopicTranscodeJobs, nil, msgBytes); err != nil {
-		ts.loggerManager.Logger().Errorf("failed to send transcode message: %v", err)
+		ts.loggerManager.Logger().Errorf("failed to send transcode message: jobID=%d err=%v", newJob.ID, err)
+		// Roll back the new job so it doesn't dangle in Pending.
+		ts.dbManager.DB().Model(&transcodeModel.TranscodeJob{}).Where("id = ?", newJob.ID).
+			Updates(map[string]interface{}{
+				"status":        transcodeModel.JobStatusFailed,
+				"error_message": "failed to queue transcode job",
+			})
 		return nil, fmt.Errorf("failed to queue transcode job: %w", err)
 	}
+
+	// Send succeeded → mark file + torrent Pending.
+	ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", oldJob.TorrentID, oldJob.FileIndex).
+		Updates(map[string]interface{}{
+			"transcode_status": torrentModel.TranscodeStatusPending,
+			"transcode_error":  "",
+		})
+
+	ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("id = ?", oldJob.TorrentID).
+		Update("transcode_status", torrentModel.TranscodeStatusPending)
 
 	return &vo.RetryTranscodeResponse{
 		JobID:   newJob.ID,
@@ -426,6 +432,101 @@ func (ts *TranscodeServiceImpl) TriggerTranscodeCheck(torrentID int64) {
 	}
 }
 
+// RequeueTranscode resets transcode state for an eligible set of original files
+// and re-runs CheckAndQueueTranscode so the worker picks them up again.
+//
+// Eligibility (per file):
+//   - Always reset: TranscodeStatus == Failed
+//   - Default skip: TranscodeStatus == Pending or Processing (worker may still
+//     be doing it). Pass force=true to override.
+//   - Always skip: TranscodeStatus == Completed (no point — nothing to redo)
+//   - Always skip: TranscodeStatus == None — nothing to reset; CheckAndQueueTranscode
+//     handles fresh files itself.
+//
+// Verifies caller owns the torrent.
+func (ts *TranscodeServiceImpl) RequeueTranscode(c *gin.Context, req *dto.RequeueTranscodeRequest, callerUserID int64) (*vo.RequeueTranscodeResponse, error) {
+	var torrentRecord torrentModel.Torrent
+	if err := ts.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("`index` asc")
+		}).
+		Where("info_hash = ? AND deleted = ?", req.InfoHash, false).
+		First(&torrentRecord).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("torrent not found")
+		}
+		return nil, err
+	}
+
+	if torrentRecord.CreatorID != callerUserID {
+		return nil, errors.New("not the torrent creator")
+	}
+
+	// Build the set of file indexes to reset.
+	var resetIDs []int64
+	for _, f := range torrentRecord.Files {
+		// Only original files participate — derived (transcoded/extracted) rows
+		// are byproducts, not source material.
+		if f.Source != "" && f.Source != "original" {
+			continue
+		}
+		if req.FileIndex != nil && f.Index != *req.FileIndex {
+			continue
+		}
+
+		switch f.TranscodeStatus {
+		case torrentModel.TranscodeStatusFailed:
+			resetIDs = append(resetIDs, f.ID)
+		case torrentModel.TranscodeStatusPending, torrentModel.TranscodeStatusProcessing:
+			if req.Force {
+				resetIDs = append(resetIDs, f.ID)
+			}
+		case torrentModel.TranscodeStatusCompleted, torrentModel.TranscodeStatusNone:
+			// skip
+		}
+	}
+
+	if len(resetIDs) > 0 {
+		if err := ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+			Where("id IN ?", resetIDs).
+			Updates(map[string]any{
+				"transcode_status": torrentModel.TranscodeStatusNone,
+				"transcoded_path":  "",
+				"transcode_error":  "",
+			}).Error; err != nil {
+			return nil, fmt.Errorf("reset file transcode state: %w", err)
+		}
+	}
+
+	// Reset torrent-level aggregate so CheckAndQueueTranscode can rebuild it.
+	if err := ts.dbManager.DB().Model(&torrentRecord).Updates(map[string]any{
+		"transcode_status":   torrentModel.TranscodeStatusNone,
+		"transcode_progress": 0,
+	}).Error; err != nil {
+		return nil, fmt.Errorf("reset torrent transcode state: %w", err)
+	}
+
+	// Make sure the torrent is marked completed so CheckAndQueueTranscode
+	// doesn't bail at its early "only completed downloads" guard.
+	if torrentRecord.Status == torrentModel.StatusCompleted {
+		if err := ts.CheckAndQueueTranscode(c, torrentRecord.ID); err != nil {
+			return nil, fmt.Errorf("re-queue transcode: %w", err)
+		}
+	} else {
+		ts.loggerManager.Logger().Warnf("RequeueTranscode skipped CheckAndQueue because torrent status != completed: torrentID=%d status=%d",
+			torrentRecord.ID, torrentRecord.Status)
+	}
+
+	ts.loggerManager.Logger().Infof("RequeueTranscode: torrentID=%d resetCount=%d force=%v fileIndex=%v",
+		torrentRecord.ID, len(resetIDs), req.Force, req.FileIndex)
+
+	return &vo.RequeueTranscodeResponse{
+		InfoHash:      req.InfoHash,
+		RequeuedFiles: len(resetIDs),
+		Message:       fmt.Sprintf("Reset %d file(s) and re-ran transcode check", len(resetIDs)),
+	}, nil
+}
+
 // queueCloudUpload sends a cloud upload job to the queue
 func (ts *TranscodeServiceImpl) queueCloudUpload(torrentID int64, infoHash string, fileIndex int, localPath string, fileSize int64, isTranscoded bool, creatorID int64, torrentRecord *torrentModel.Torrent) {
 	// Build cloud path
@@ -456,17 +557,6 @@ func (ts *TranscodeServiceImpl) queueCloudUpload(torrentID int64, infoHash strin
 		contentType = ct
 	}
 
-	// Update file cloud status to pending
-	// Update file cloud status to pending
-	ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
-		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
-		Update("cloud_upload_status", torrentModel.CloudUploadStatusPending)
-		
-	// Increment total cloud upload count on torrent
-	ts.dbManager.DB().Model(&torrentModel.Torrent{}).
-		Where("id = ?", torrentID).
-		UpdateColumn("total_cloud_upload", gorm.Expr("total_cloud_upload + ?", 1))
-
 	msg := cloudTypes.CloudUploadMessage{
 		TorrentID:     torrentID,
 		InfoHash:      infoHash,
@@ -482,14 +572,26 @@ func (ts *TranscodeServiceImpl) queueCloudUpload(torrentID int64, infoHash strin
 
 	msgBytes, err := json.Marshal(msg)
 	if err != nil {
-		ts.loggerManager.Logger().Errorf("failed to marshal cloud upload message: %v", err)
+		ts.loggerManager.Logger().Errorf("failed to marshal cloud upload message: torrentID=%d fileIndex=%d err=%v", torrentID, fileIndex, err)
 		return
 	}
 
+	// Outbox-style: send first; only on success mark Pending. total_cloud_upload
+	// is no longer incremented here — it's recomputed from per-file rows by the
+	// event processor's recomputeCloudStatus, so retries don't double-count.
 	if err := ts.queueProducer.Send(context.Background(), cloudTypes.TopicCloudUploadJobs, nil, msgBytes); err != nil {
-		ts.loggerManager.Logger().Errorf("failed to send cloud upload message: %v", err)
-	} else {
-		ts.loggerManager.Logger().Infof("Queued cloud upload: torrentID=%d, fileIndex=%d, cloudPath=%s",
-			torrentID, fileIndex, cloudPath)
+		ts.loggerManager.Logger().Errorf("failed to send cloud upload message (status untouched, retry safe): torrentID=%d fileIndex=%d err=%v", torrentID, fileIndex, err)
+		return
 	}
+
+	if err := ts.dbManager.DB().Model(&torrentModel.TorrentFile{}).
+		Where("torrent_id = ? AND `index` = ?", torrentID, fileIndex).
+		Updates(map[string]interface{}{
+			"cloud_upload_status": torrentModel.CloudUploadStatusPending,
+			"cloud_upload_error":  "",
+		}).Error; err != nil {
+		ts.loggerManager.Logger().Errorf("failed to mark file cloud Pending after enqueue: torrentID=%d fileIndex=%d err=%v", torrentID, fileIndex, err)
+	}
+
+	ts.loggerManager.Logger().Infof("Queued cloud upload: torrentID=%d fileIndex=%d cloudPath=%s", torrentID, fileIndex, cloudPath)
 }

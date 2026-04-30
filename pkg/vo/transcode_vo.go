@@ -56,3 +56,10 @@ type CancelTranscodeResponse struct {
 	JobID   int64  `json:"job_id"`  // Canceled job ID
 	Message string `json:"message"` // Status message
 }
+
+// RequeueTranscodeResponse response for re-running the transcode pipeline
+type RequeueTranscodeResponse struct {
+	InfoHash     string `json:"info_hash"`     // Torrent info hash
+	RequeuedFiles int   `json:"requeued_files"` // Number of files that were re-queued for transcode
+	Message      string `json:"message"`        // Status message
+}

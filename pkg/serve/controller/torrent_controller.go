@@ -41,6 +41,7 @@ import (
 type TorrentController struct {
 	config              *configs.Config
 	torrentService      service.TorrentService
+	transcodeService    service.TranscodeService
 	dbManager           db.DatabaseManager
 	cloudStorageManager cloud.CloudStorageManager
 	queueProducer       queue.Producer
@@ -51,6 +52,7 @@ type TorrentController struct {
 func NewTorrentController(
 	config *configs.Config,
 	torrentService service.TorrentService,
+	transcodeService service.TranscodeService,
 	dbManager db.DatabaseManager,
 	cloudStorageManager cloud.CloudStorageManager,
 	queueProducer queue.Producer,
@@ -59,6 +61,7 @@ func NewTorrentController(
 	return &TorrentController{
 		config:              config,
 		torrentService:      torrentService,
+		transcodeService:    transcodeService,
 		dbManager:           dbManager,
 		cloudStorageManager: cloudStorageManager,
 		queueProducer:       queueProducer,
@@ -821,7 +824,7 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 
 	var retriedCount int
 	for i, file := range torrentRecord.Files {
-		if !shouldRetryCloudUploadFile(file) {
+		if !shouldRetryCloudUploadFile(file, req.Force) {
 			continue
 		}
 
@@ -953,6 +956,17 @@ func (tc *TorrentController) RetryCloudUploadFile(c *gin.Context) {
 
 	file := torrentRecord.Files[req.FileIndex]
 
+	// Apply the same eligibility check as bulk retry — single-file retry shouldn't
+	// silently bypass the safety net (e.g. produce concurrent uploads on Uploading).
+	if !shouldRetryCloudUploadFile(file, req.Force) {
+		c.JSON(http.StatusOK, vo.Success(c, pkgVo.RetryCloudUploadResponse{
+			InfoHash:     req.InfoHash,
+			RetriedCount: 0,
+			Message:      "File not eligible for retry (already completed, or in-flight — pass force=true to override)",
+		}))
+		return
+	}
+
 	// Determine local path
 	localPath := resolveRetryLocalPath(torrentRecord, file)
 
@@ -978,7 +992,8 @@ func (tc *TorrentController) RetryCloudUploadFile(c *gin.Context) {
 		fileSize = file.Size
 	}
 
-	// Build and send message
+	// Outbox-style: send first; only on success update DB statuses. If sending
+	// fails the file row stays as-is so a future retry can pick it up.
 	msg := cloudTypes.CloudUploadMessage{
 		TorrentID:     torrentRecord.ID,
 		InfoHash:      torrentRecord.InfoHash,
@@ -1004,7 +1019,7 @@ func (tc *TorrentController) RetryCloudUploadFile(c *gin.Context) {
 		return
 	}
 
-	// Reset file status to pending in DB
+	// Send succeeded → mark file Pending in DB.
 	tc.dbManager.DB().Model(&torrentModel.TorrentFile{}).
 		Where("torrent_id = ? AND `index` = ?", torrentRecord.ID, file.Index).
 		Updates(map[string]interface{}{
@@ -1026,6 +1041,33 @@ func (tc *TorrentController) RetryCloudUploadFile(c *gin.Context) {
 		RetriedCount: 1,
 		Message:      fmt.Sprintf("Re-queued file #%d for cloud upload", req.FileIndex),
 	}))
+}
+
+// RequeueTranscode re-runs the transcode pipeline for a torrent (creator only).
+// @Router /api/v1/torrent/transcode/requeue [post]
+func (tc *TorrentController) RequeueTranscode(c *gin.Context) {
+	req := &dto.RequeueTranscodeRequest{}
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "bind JSON failed"))))
+		return
+	}
+	if errs := validator.Validate(req); errs != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, errs, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "validation failed"))))
+		return
+	}
+
+	userID := auth.GetUserID(c)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, vo.Fail(c, nil, errorx.New(errno.ErrUnauthorized)))
+		return
+	}
+
+	resp, err := tc.transcodeService.RequeueTranscode(c, req, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrInternalServer, errorx.KV("msg", err.Error()))))
+		return
+	}
+	c.JSON(http.StatusOK, vo.Success(c, resp))
 }
 
 // DeleteLocalFiles handles deleting local files for a torrent after cloud upload
@@ -1114,21 +1156,38 @@ func (tc *TorrentController) DeleteLocalFiles(c *gin.Context) {
 	c.JSON(http.StatusOK, vo.Success(c, map[string]string{"message": "local files deleted"}))
 }
 
-func shouldRetryCloudUploadFile(file torrentModel.TorrentFile) bool {
-	// Never retry completed files.
+// shouldRetryCloudUploadFile decides whether a file is eligible for re-queueing.
+//
+// Default (force=false):
+//   - Completed:           never retry (object already in cloud)
+//   - Failed:              retry — this is the obvious "fix it" case
+//   - Pending / Uploading: skip — worker may genuinely still be doing it.
+//     Re-queueing here would cause two concurrent uploads racing each other
+//     and one of them clobbering the other's CloudPath / status. Use force=true
+//     to override (e.g. when the user knows the queue message was actually lost).
+//   - None:                retry only if the file is a likely cloud candidate
+//     (selected video/subtitle/transcoded/extracted that was never attempted)
+//
+// Force=true:
+//   - Treat Pending / Uploading the same as Failed (will be re-queued).
+//   - Completed still won't be retried (no point — it's done).
+//   - None falls back to the candidate heuristic, same as default.
+func shouldRetryCloudUploadFile(file torrentModel.TorrentFile, force bool) bool {
 	if file.CloudUploadStatus == torrentModel.CloudUploadStatusCompleted {
 		return false
 	}
 
-	// First-class retry states.
-	if file.CloudUploadStatus == torrentModel.CloudUploadStatusFailed ||
-		file.CloudUploadStatus == torrentModel.CloudUploadStatusPending ||
-		file.CloudUploadStatus == torrentModel.CloudUploadStatusUploading {
+	if file.CloudUploadStatus == torrentModel.CloudUploadStatusFailed {
 		return true
 	}
 
-	// Fallback for stale status records: allow manual retry of likely cloud candidates
-	// when status is NONE but object is not marked completed.
+	if file.CloudUploadStatus == torrentModel.CloudUploadStatusPending ||
+		file.CloudUploadStatus == torrentModel.CloudUploadStatusUploading {
+		return force
+	}
+
+	// Status == None below this line. CloudPath being set means a previous attempt
+	// at least chose a target — not a fresh candidate, so skip.
 	if file.CloudUploadStatus != torrentModel.CloudUploadStatusNone || file.CloudPath != "" {
 		return false
 	}

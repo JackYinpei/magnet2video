@@ -9,15 +9,21 @@ type GetCloudURLRequest struct {
 	FileIndex int    `json:"file_index" validate:"gte=0"`   // Index of the file within the torrent
 }
 
-// RetryCloudUploadRequest request for retrying failed cloud uploads
+// RetryCloudUploadRequest request for retrying cloud uploads.
+// Force=true also re-queues files currently in Pending/Uploading (use with care:
+// if a worker is genuinely uploading the file, this will produce two concurrent
+// uploads). Default Force=false only retries Failed and never-attempted files.
 type RetryCloudUploadRequest struct {
 	InfoHash string `json:"info_hash" validate:"required"` // Info hash of the torrent
+	Force    bool   `json:"force"`                          // Override Pending/Uploading mid-states
 }
 
-// RetryCloudUploadFileRequest request for retrying cloud upload for a single file
+// RetryCloudUploadFileRequest request for retrying cloud upload for a single file.
+// Force semantics same as RetryCloudUploadRequest.
 type RetryCloudUploadFileRequest struct {
 	InfoHash  string `json:"info_hash" validate:"required"`  // Info hash of the torrent
 	FileIndex int    `json:"file_index" validate:"gte=0"`    // Index of the file to re-upload
+	Force     bool   `json:"force"`                          // Override Pending/Uploading mid-states
 }
 
 // DeleteLocalFilesRequest request for deleting local files of a torrent

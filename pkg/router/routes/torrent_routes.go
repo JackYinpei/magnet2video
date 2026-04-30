@@ -68,6 +68,9 @@ func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 		// Retry cloud upload for a single file
 		protectedTorrent.POST("/cloud-upload/retry-file", container.TorrentController.RetryCloudUploadFile)
 
+		// Re-run transcode pipeline (creator only)
+		protectedTorrent.POST("/transcode/requeue", container.TorrentController.RequeueTranscode)
+
 		// Delete local files after cloud upload
 		protectedTorrent.POST("/delete-local", container.TorrentController.DeleteLocalFiles)
 

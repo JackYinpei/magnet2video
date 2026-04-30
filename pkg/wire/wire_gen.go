@@ -208,16 +208,17 @@ func buildServicesAndControllers(c *Container, config *configs.Config) {
 
 	torrentSvc := impl.NewTorrentService(config, c.LoggerManager, c.DatabaseManager, c.TorrentManager, c.CacheManager, c.QueueProducer)
 	c.TorrentService = torrentSvc
-	c.TorrentController = controller.NewTorrentController(config, torrentSvc, c.DatabaseManager, c.CloudStorageManager, c.QueueProducer, c.TMDBClient)
+
+	transcodeSvc := impl.NewTranscodeService(config, c.LoggerManager, c.DatabaseManager, c.TorrentManager, c.QueueProducer)
+	c.TranscodeService = transcodeSvc
+
+	c.TorrentController = controller.NewTorrentController(config, torrentSvc, transcodeSvc, c.DatabaseManager, c.CloudStorageManager, c.QueueProducer, c.TMDBClient)
 
 	userSvc := impl.NewUserService(c.LoggerManager, c.DatabaseManager)
 	c.UserController = controller.NewUserController(userSvc)
 
 	adminSvc := impl.NewAdminService(c.LoggerManager, c.DatabaseManager, c.TorrentManager)
 	c.AdminController = controller.NewAdminController(adminSvc)
-
-	transcodeSvc := impl.NewTranscodeService(config, c.LoggerManager, c.DatabaseManager, c.TorrentManager, c.QueueProducer)
-	c.TranscodeService = transcodeSvc
 
 	c.WorkerController = controller.NewWorkerController(c.StatusStore)
 }
