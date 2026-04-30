@@ -106,6 +106,23 @@ type RabbitMQConfig struct {
 	PrefetchCount int    `mapstructure:"PREFETCH_COUNT"` // Prefetch count for consumers
 }
 
+// EventsConfig groups server-side event processing knobs.
+type EventsConfig struct {
+	Reaper ReaperConfig `mapstructure:"REAPER"` // Stuck-state reaper goroutine
+}
+
+// ReaperConfig tunes the background reaper that demotes mid-state torrent_files
+// rows (Pending/Processing/Uploading) to Failed once they have not made
+// progress for a configured duration. Defaults are conservative; set timeouts
+// large enough that healthy long jobs never trip.
+type ReaperConfig struct {
+	Enabled                  bool `mapstructure:"ENABLED"`                    // Whether the reaper goroutine runs (default: true)
+	IntervalSeconds          int  `mapstructure:"INTERVAL_SECONDS"`           // How often to scan (default: 300 = 5min)
+	PendingTimeoutSeconds    int  `mapstructure:"PENDING_TIMEOUT_SECONDS"`    // Pending rows older than this → Failed (default: 1800 = 30min)
+	ProcessingTimeoutSeconds int  `mapstructure:"PROCESSING_TIMEOUT_SECONDS"` // Transcode Processing rows older than this → Failed (default: 14400 = 4h)
+	UploadingTimeoutSeconds  int  `mapstructure:"UPLOADING_TIMEOUT_SECONDS"`  // Cloud Uploading rows older than this → Failed (default: 3600 = 1h)
+}
+
 // CORSConfig CORS cross-origin configuration
 type CORSConfig struct {
 	AllowOrigins     []string `mapstructure:"ALLOW_ORIGINS"`     // Allowed origins
@@ -203,6 +220,7 @@ type Config struct {
 	LogConfig          LogConfig          `mapstructure:"LOG"`           // Logging configuration
 	RedisConfig        RedisConfig        `mapstructure:"REDIS"`         // Redis configuration
 	QueueConfig        QueueConfig        `mapstructure:"QUEUE"`         // Message queue configuration
+	EventsConfig       EventsConfig       `mapstructure:"EVENTS"`        // Server-side event processing knobs
 	AI                 AIConfig           `mapstructure:"AI"`            // AI service configuration
 	TorrentConfig      TorrentConfig      `mapstructure:"TORRENT"`       // Torrent client configuration
 	TranscodeConfig    TranscodeConfig    `mapstructure:"TRANSCODE"`     // Video transcoding configuration

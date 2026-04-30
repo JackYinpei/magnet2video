@@ -67,6 +67,19 @@ QUEUE:
     EXCHANGE_TYPE: "direct"
     PREFETCH_COUNT: 1
 
+# 服务端事件处理相关配置
+EVENTS:
+  # Reaper 后台 goroutine：定期扫描卡在中间态 (Pending/Processing/Uploading)
+  # 且 updated_at 已过期的 torrent_files 行，降级为 Failed 并触发聚合重算。
+  # 用于兜底 worker 崩溃 / 队列消息丢失等导致的状态卡死。
+  # 健康的长任务在合理超时下不会被误伤；只有真正的"死任务"才会被收割。
+  REAPER:
+    ENABLED: true                    # 是否启用 reaper（建议 server/all 模式开启）
+    INTERVAL_SECONDS: 300            # 扫描周期（默认 300=5min）
+    PENDING_TIMEOUT_SECONDS: 1800    # Pending 超过该秒数 → Failed（默认 1800=30min）
+    PROCESSING_TIMEOUT_SECONDS: 14400 # Transcode Processing 超时（默认 14400=4h，给大文件留足时间）
+    UPLOADING_TIMEOUT_SECONDS: 3600  # Cloud Uploading 超时（默认 3600=1h）
+
 # AI 提供商配置 —— API key 留空占位，需要时再填
 AI:
   PROMPT:

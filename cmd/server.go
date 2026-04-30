@@ -10,6 +10,7 @@ import (
 	"log"
 
 	"magnet2video/configs"
+	"magnet2video/internal/events/processor"
 	"magnet2video/pkg/wire"
 )
 
@@ -43,7 +44,7 @@ func runServer(cfg *configs.Config) {
 	container.EventProcessor.SetTranscodeChecker(container.TranscodeService)
 	log.Println("[server mode] TranscodeChecker wired into EventProcessor")
 
-	_, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	consumers := startConsumers(cfg, container, consumerConfig{
@@ -52,6 +53,11 @@ func runServer(cfg *configs.Config) {
 		workerHeartbeat: true,  // server listens for worker heartbeats
 	})
 	defer closeConsumers(consumers)
+
+	// Stuck-state reaper: catches files left in Pending/Processing/Uploading
+	// when the worker crashes mid-job or a queue message is lost. Opt-in via
+	// EVENTS.REAPER.ENABLED in config.
+	go processor.NewReaperFromConfig(container.EventProcessor, cfg.EventsConfig.Reaper).Run(ctx)
 
 	runHTTPServer(cfg, container)
 }

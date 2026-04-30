@@ -17,6 +17,7 @@ import (
 
 	"magnet2video/configs"
 	cloudTypes "magnet2video/internal/cloud/types"
+	"magnet2video/internal/events/processor"
 	eventTypes "magnet2video/internal/events/types"
 	"magnet2video/internal/middleware"
 	"magnet2video/internal/queue"
@@ -71,6 +72,11 @@ func runAll(cfg *configs.Config) {
 	// Worker-side loops (heartbeat, progress reporter) also run in-process.
 	go container.HeartbeatPublisher.Start(ctx)
 	go container.ProgressReporter.Start(ctx)
+
+	// Stuck-state reaper: in all-mode the same process owns DB writes, so the
+	// reaper runs here for the same reason as in server-mode. Opt-in via
+	// EVENTS.REAPER.ENABLED.
+	go processor.NewReaperFromConfig(container.EventProcessor, cfg.EventsConfig.Reaper).Run(ctx)
 
 	runHTTPServer(cfg, container)
 }
