@@ -100,16 +100,13 @@ func TestOverrideFromEnv(t *testing.T) {
 	t.Setenv("SUPER_ADMIN_PASSWORD", "adminpass")
 
 	t.Setenv("CLOUD_STORAGE_ENABLED", "1")
-	t.Setenv("CLOUD_STORAGE_PROVIDER", "s3")
 	t.Setenv("CLOUD_STORAGE_BUCKET_NAME", "cloud-bucket")
-	t.Setenv("GCS_CREDENTIALS_FILE", "/tmp/gcs.json")
-	t.Setenv("GCS_BUCKET_NAME", "gcs-bucket")
 	t.Setenv("S3_REGION", "us-east-1")
 	t.Setenv("S3_ACCESS_KEY_ID", "ak")
 	t.Setenv("S3_SECRET_ACCESS_KEY", "sk")
 	t.Setenv("S3_ENDPOINT", "https://s3.example.com")
 	t.Setenv("S3_ADDRESSING_STYLE", "path")
-	t.Setenv("S3_SIGNATURE_VERSION", "s3")
+	t.Setenv("S3_SIGNATURE_VERSION", "v4")
 	t.Setenv("S3_BUCKET_NAME", "s3-bucket")
 
 	config := &Config{}
@@ -136,14 +133,8 @@ func TestOverrideFromEnv(t *testing.T) {
 	if !config.CloudStorageConfig.Enabled {
 		t.Fatalf("Cloud storage enabled override failed")
 	}
-	if config.CloudStorageConfig.Provider != "s3" {
-		t.Fatalf("Cloud storage provider override failed: %q", config.CloudStorageConfig.Provider)
-	}
 	if config.CloudStorageConfig.BucketName != "s3-bucket" {
 		t.Fatalf("Cloud storage bucket override failed: %q", config.CloudStorageConfig.BucketName)
-	}
-	if config.CloudStorageConfig.CredentialsFile != "/tmp/gcs.json" {
-		t.Fatalf("Cloud storage credentials override failed: %q", config.CloudStorageConfig.CredentialsFile)
 	}
 	if config.CloudStorageConfig.Endpoint != "https://s3.example.com" {
 		t.Fatalf("Cloud storage endpoint override failed: %q", config.CloudStorageConfig.Endpoint)
@@ -151,7 +142,7 @@ func TestOverrideFromEnv(t *testing.T) {
 	if config.CloudStorageConfig.AddressingStyle != "path" {
 		t.Fatalf("Cloud storage addressing style override failed: %q", config.CloudStorageConfig.AddressingStyle)
 	}
-	if config.CloudStorageConfig.SignatureVersion != "s3" {
+	if config.CloudStorageConfig.SignatureVersion != "v4" {
 		t.Fatalf("Cloud storage signature version override failed: %q", config.CloudStorageConfig.SignatureVersion)
 	}
 }

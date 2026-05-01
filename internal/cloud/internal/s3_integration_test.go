@@ -47,9 +47,6 @@ func TestS3UploadWithProdConfig(t *testing.T) {
 	if !cfg.CloudStorageConfig.Enabled {
 		t.Fatalf("cloud storage is disabled in config.yml")
 	}
-	if strings.ToLower(cfg.CloudStorageConfig.Provider) != "s3" {
-		t.Fatalf("cloud storage provider must be s3, got %q", cfg.CloudStorageConfig.Provider)
-	}
 
 	manager := NewS3Manager(&cfg, newIntegrationLoggerManager())
 	t.Cleanup(func() {
@@ -150,9 +147,6 @@ func prodConfigPath(t *testing.T) string {
 func applyCloudOverridesFromEnv(cfg *configs.Config) {
 	if val := os.Getenv("CLOUD_STORAGE_ENABLED"); val != "" {
 		cfg.CloudStorageConfig.Enabled = val == "1" || strings.EqualFold(val, "true")
-	}
-	if val := os.Getenv("CLOUD_STORAGE_PROVIDER"); val != "" {
-		cfg.CloudStorageConfig.Provider = val
 	}
 	if val := os.Getenv("CLOUD_STORAGE_BUCKET_NAME"); val != "" {
 		cfg.CloudStorageConfig.BucketName = val

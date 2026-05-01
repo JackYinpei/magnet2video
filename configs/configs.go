@@ -187,25 +187,22 @@ type TranscodeConfig struct {
 	DefaultAudioCodec string   `mapstructure:"DEFAULT_AUDIO_CODEC"` // Default audio codec (aac)
 }
 
-// CloudStorageConfig cloud storage configuration
+// CloudStorageConfig cloud storage configuration. Only S3 / S3-compatible
+// (MinIO, Ceph, self-hosted hi168, etc.) is supported.
 type CloudStorageConfig struct {
 	Enabled              bool   `mapstructure:"ENABLED"`                 // Whether cloud storage is enabled
-	Provider             string `mapstructure:"PROVIDER"`                // Cloud provider: "gcs" or "s3"
 	BucketName           string `mapstructure:"BUCKET_NAME"`             // Cloud storage bucket name
 	SignedURLExpireHours int    `mapstructure:"SIGNED_URL_EXPIRE_HOURS"` // Signed URL expiration time in hours (default 3)
 	PathPrefix           string `mapstructure:"PATH_PREFIX"`             // Object path prefix (default "torrents")
 	PublicURL            string `mapstructure:"PUBLIC_URL"`              // Public base URL to directly access cloud files without signed URLs
 
-	// GCS specific
-	CredentialsFile string `mapstructure:"CREDENTIALS_FILE"` // GCS service account JSON file path
-
-	// S3/S3-compatible specific
+	// S3 / S3-compatible
 	Region           string `mapstructure:"REGION"`            // AWS region (e.g. "us-east-1")
 	AccessKeyID      string `mapstructure:"ACCESS_KEY_ID"`     // AWS Access Key ID
 	SecretAccessKey  string `mapstructure:"SECRET_ACCESS_KEY"` // AWS Secret Access Key
 	Endpoint         string `mapstructure:"ENDPOINT"`          // Custom endpoint for S3-compatible storage (MinIO, etc.)
 	AddressingStyle  string `mapstructure:"ADDRESSING_STYLE"`  // S3 addressing style: "path" or "virtual"
-	SignatureVersion string `mapstructure:"SIGNATURE_VERSION"` // S3 signature version: "v4" (default) or "s3"/"v2"
+	SignatureVersion string `mapstructure:"SIGNATURE_VERSION"` // S3 signature version: "v4" (default, recommended) or "s3"/"v2" (legacy)
 }
 
 // TMDBConfig TMDB API configuration
@@ -301,10 +298,8 @@ func bindEnvVariables() {
 	_ = v.BindEnv("APP.USER.SUPER_ADMIN_EMAIL", "SUPER_ADMIN_EMAIL")
 	_ = v.BindEnv("APP.USER.SUPER_ADMIN_PASSWORD", "SUPER_ADMIN_PASSWORD")
 
-	// Cloud Storage bindings
+	// Cloud Storage bindings (S3 / S3-compatible only)
 	_ = v.BindEnv("CLOUD_STORAGE.ENABLED", "CLOUD_STORAGE_ENABLED")
-	_ = v.BindEnv("CLOUD_STORAGE.CREDENTIALS_FILE", "GCS_CREDENTIALS_FILE")
-	_ = v.BindEnv("CLOUD_STORAGE.BUCKET_NAME", "GCS_BUCKET_NAME")
 	_ = v.BindEnv("CLOUD_STORAGE.ADDRESSING_STYLE", "S3_ADDRESSING_STYLE")
 	_ = v.BindEnv("CLOUD_STORAGE.SIGNATURE_VERSION", "S3_SIGNATURE_VERSION")
 	_ = v.BindEnv("CLOUD_STORAGE.PUBLIC_URL", "CLOUD_STORAGE_PUBLIC_URL")
@@ -386,24 +381,13 @@ func overrideFromEnv(config *Config) {
 		config.AppConfig.User.SuperAdminPassword = val
 	}
 
-	// Cloud Storage overrides
+	// Cloud Storage overrides (S3 / S3-compatible only)
 	if val := os.Getenv("CLOUD_STORAGE_ENABLED"); val != "" {
 		config.CloudStorageConfig.Enabled = val == "true" || val == "1"
-	}
-	if val := os.Getenv("CLOUD_STORAGE_PROVIDER"); val != "" {
-		config.CloudStorageConfig.Provider = val
 	}
 	if val := os.Getenv("CLOUD_STORAGE_BUCKET_NAME"); val != "" {
 		config.CloudStorageConfig.BucketName = val
 	}
-	// GCS specific
-	if val := os.Getenv("GCS_CREDENTIALS_FILE"); val != "" {
-		config.CloudStorageConfig.CredentialsFile = val
-	}
-	if val := os.Getenv("GCS_BUCKET_NAME"); val != "" {
-		config.CloudStorageConfig.BucketName = val
-	}
-	// S3 specific
 	if val := os.Getenv("S3_REGION"); val != "" {
 		config.CloudStorageConfig.Region = val
 	}

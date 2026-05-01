@@ -6,10 +6,8 @@ package heartbeat
 import (
 	"context"
 	"log"
-	"os"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"magnet2video/internal/events/gateway"
@@ -151,22 +149,4 @@ func (p *Publisher) snapshotJobs() []eventTypes.HeartbeatJob {
 		out = append(out, j)
 	}
 	return out
-}
-
-// diskInfoGB reports (free, total) GB on the download directory filesystem.
-func (p *Publisher) diskInfoGB() (int64, int64) {
-	if p.downloadDir == "" {
-		return 0, 0
-	}
-	path := p.downloadDir
-	if _, err := os.Stat(path); err != nil {
-		return 0, 0
-	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, 0
-	}
-	free := int64(stat.Bavail) * int64(stat.Bsize) / (1024 * 1024 * 1024)
-	total := int64(stat.Blocks) * int64(stat.Bsize) / (1024 * 1024 * 1024)
-	return free, total
 }

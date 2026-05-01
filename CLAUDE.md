@@ -18,7 +18,7 @@
 5. **流式播放**: HTTP Range 请求支持,实现视频拖拽和边下边播
 6. **权限控制**: JWT 认证 + 公开/私有种子分离
 7. **缓存优化**: Redis 缓存(Cache-Aside 模式) + 异步写入策略
-8. **云存储集成**: 支持 GCS/S3 云存储,自动上传转码文件,Signed URL 安全访问
+8. **云存储集成**: 支持 S3 / S3 兼容存储(MinIO、Ceph、自托管 S3 网关),自动上传转码文件,Signed URL 安全访问
 
 ---
 
@@ -113,9 +113,9 @@ magnet-video/
 ├── internal/                     # 核心基础设施层(不可被外部导入)
 │   ├── ai/                      # AI 服务集成(OpenAI/Gemini)
 │   ├── cache/                   # 缓存抽象层(基于 Redis)
-│   ├── cloud/                   # 云存储模块(GCS/S3)
+│   ├── cloud/                   # 云存储模块(S3 / S3 兼容)
 │   │   ├── cloud.go            # 工厂类和接口定义
-│   │   ├── internal/           # 具体实现(manager.go=GCS, s3_manager.go=S3)
+│   │   ├── internal/           # 具体实现(interface.go=接口, s3_manager.go=S3)
 │   │   ├── handler/            # 云上传消息消费者
 │   │   └── types/              # 消息类型定义
 │   ├── db/                      # 数据库管理(GORM)
@@ -197,7 +197,7 @@ flowchart TB
     DB[(GORM DB\nMySQL/Postgres/SQLite)]
     Redis[(Redis)]
     Cache["Cache Manager"]
-    Cloud["Cloud Storage\nGCS / S3"]
+    Cloud["Cloud Storage\nS3 / S3-compatible"]
     CloudConsumer["Cloud Upload Consumer"]
     TorrentMgr["Torrent Manager\nanacrolix/torrent"]
     Queue["Queue Producer\nGoChannel / RabbitMQ"]
@@ -212,7 +212,7 @@ flowchart TB
     P2P[(BT Swarm / Trackers)]
     MQ[(RabbitMQ 可选)]
     Disk[(Download Dir / Transcoded Files)]
-    CloudStorage[(GCS / S3 云存储)]
+    CloudStorage[(S3 / S3-compatible 云存储)]
   end
 
   U --> Gin
@@ -329,10 +329,9 @@ flowchart TB
   6. `auth.AdminMiddleware()` - 管理员权限校验
 
 ##### 云存储模块 (`internal/cloud/`)
-- **职责**: 文件上传到云存储(GCS/S3),生成 Signed URL 安全访问
-- **支持的云服务商**:
-  - **Google Cloud Storage (GCS)**: `internal/cloud/internal/manager.go`
-  - **AWS S3 / MinIO**: `internal/cloud/internal/s3_manager.go`
+- **职责**: 文件上传到 S3 / S3 兼容存储,生成 Signed URL 安全访问
+- **支持的存储**:
+  - **AWS S3 / MinIO / Ceph / 其他 S3 兼容网关**: `internal/cloud/internal/s3_manager.go`
 - **核心接口**: `CloudStorageManager`
   - `Upload(ctx, objectPath, reader, contentType)`: 上传文件
   - `UploadWithProgress(ctx, objectPath, reader, size, contentType, progressFn)`: 带进度回调上传,大文件(>100MB)自动使用 multipart upload,上传期间每 5 分钟输出 `[upload-status]` 日志显示当前上传文件和已用时间
@@ -736,7 +735,7 @@ sequenceDiagram
   participant CC as Cloud Consumer
   participant FF as FFmpeg/FFprobe
   participant FS as 下载目录
-  participant Cloud as 云存储(GCS/S3)
+  participant Cloud as 云存储(S3 / S3-compatible)
 
   U->>UI: 提交磁力链
   UI->>API: POST /api/v1/torrent/parse
@@ -824,7 +823,7 @@ sequenceDiagram
    ↓
 4. 更新文件状态为 uploading
    ↓
-5. CloudStorageManager.UploadWithProgress() 上传到 GCS/S3
+5. CloudStorageManager.UploadWithProgress() 上传到 S3
    ↓
 6. 更新 TorrentFile.CloudUploadStatus = completed, 保存 CloudPath
    ↓
@@ -907,17 +906,17 @@ AI:
 
 CLOUD_STORAGE:
   ENABLED: true                           # 是否启用云存储上传
-  PROVIDER: "gcs"                         # 云存储提供商: "gcs" 或 "s3"
   BUCKET_NAME: "my-bucket"                # Bucket 名称
   SIGNED_URL_EXPIRE_HOURS: 3              # Signed URL 过期时间(小时)
   PATH_PREFIX: "torrents"                 # 对象路径前缀
-  # GCS 专用
-  CREDENTIALS_FILE: "./gcs-sa.json"       # GCS Service Account JSON 文件
-  # S3 专用
+  PUBLIC_URL: ""                          # 留空走签名 URL;填值则返回直链(需 bucket 公开)
+  # S3 / S3 兼容
   REGION: "us-east-1"                     # AWS 区域
   ACCESS_KEY_ID: "AKIA..."                # AWS Access Key
   SECRET_ACCESS_KEY: "..."                # AWS Secret Key
-  ENDPOINT: ""                            # 自定义端点(MinIO 等)
+  ENDPOINT: ""                            # 自定义端点(MinIO 等;AWS 留空)
+  ADDRESSING_STYLE: "path"                # "path" 或 "virtual"
+  SIGNATURE_VERSION: "v4"                 # 推荐 "v4",仅老服务设 "s3"/"v2"
 ```
 
 ### 访问配置
@@ -1303,7 +1302,7 @@ docker-compose down
 1. **完整的企业级架构**: 分层清晰,高内聚低耦合
 2. **视频在线播放**: 自动转码为浏览器兼容格式(类 Netflix 体验)
 3. **异步转码系统**: 消息队列解耦,支持 GoChannel(开发) 和 RabbitMQ(生产)
-4. **云存储集成**: 支持 GCS/S3,自动上传转码文件,Signed URL 安全访问
+4. **云存储集成**: 支持 S3 / S3 兼容存储,自动上传转码文件,Signed URL 安全访问
 5. **依赖注入**: Wire 编译时注入,避免反射开销
 6. **缓存策略**: Cache-Aside 模式 + 异步写入
 7. **流式传输**: 支持 HTTP Range 请求,实现视频拖拽和边下边播

@@ -215,9 +215,9 @@ func (c *Client) ParseMagnet(ctx context.Context, magnetURI string, customTracke
 
 		for _, file := range existingTorrent.Files() {
 			fileInfo := FileInfo{
-				Path:         file.DisplayPath(),
+				Path:         file.Path(),
 				Size:         file.Length(),
-				IsStreamable: isStreamableFile(file.DisplayPath()),
+				IsStreamable: isStreamableFile(file.Path()),
 			}
 			torrentInfo.Files = append(torrentInfo.Files, fileInfo)
 		}
@@ -261,9 +261,9 @@ func (c *Client) ParseMagnet(ctx context.Context, magnetURI string, customTracke
 	// Get files information
 	for _, file := range t.Files() {
 		fileInfo := FileInfo{
-			Path:         file.DisplayPath(),
+			Path:         file.Path(),
 			Size:         file.Length(),
-			IsStreamable: isStreamableFile(file.DisplayPath()),
+			IsStreamable: isStreamableFile(file.Path()),
 		}
 		torrentInfo.Files = append(torrentInfo.Files, fileInfo)
 	}
@@ -342,9 +342,9 @@ func (c *Client) GetTorrentInfo(infoHash string) (*TorrentInfo, error) {
 	// Get files information
 	for _, file := range t.Files() {
 		fileInfo := FileInfo{
-			Path:         file.DisplayPath(),
+			Path:         file.Path(),
 			Size:         file.Length(),
-			IsStreamable: isStreamableFile(file.DisplayPath()),
+			IsStreamable: isStreamableFile(file.Path()),
 		}
 		torrentInfo.Files = append(torrentInfo.Files, fileInfo)
 	}
@@ -592,7 +592,7 @@ func (c *Client) GetFilePath(infoHash string, filePath string) (string, error) {
 	// Find the file in the torrent
 	var foundFile *torrent.File
 	for _, file := range t.Files() {
-		if file.DisplayPath() == filePath {
+		if file.Path() == filePath {
 			foundFile = file
 			break
 		}
@@ -602,8 +602,9 @@ func (c *Client) GetFilePath(infoHash string, filePath string) (string, error) {
 		return "", fmt.Errorf("file not found in torrent: %s", filePath)
 	}
 
-	// The file path is relative to the download directory
-	// file.DisplayPath() typically includes the root directory for multi-file torrents
+	// file.Path() is the relative path from the download dir, including the
+	// torrent's parent directory for multi-file torrents — exactly anacrolix's
+	// on-disk layout.
 	fullPath := filepath.Join(c.downloadDir, filePath)
 
 	// Check if file exists
@@ -628,7 +629,7 @@ func (c *Client) GetFileReader(infoHash string, filePath string) (io.ReadSeeker,
 
 		// First pass: exact match
 		for _, file := range t.Files() {
-			if file.DisplayPath() == filePath {
+			if file.Path() == filePath {
 				foundFile = file
 				break
 			}
@@ -638,7 +639,7 @@ func (c *Client) GetFileReader(infoHash string, filePath string) (io.ReadSeeker,
 		if foundFile == nil {
 			targetBase := filepath.Base(filePath)
 			for _, file := range t.Files() {
-				if filepath.Base(file.DisplayPath()) == targetBase {
+				if filepath.Base(file.Path()) == targetBase {
 					foundFile = file
 					break
 				}
@@ -654,9 +655,9 @@ func (c *Client) GetFileReader(infoHash string, filePath string) (io.ReadSeeker,
 
 			// Create file info
 			fileInfo := &FileInfo{
-				Path:         foundFile.DisplayPath(),
+				Path:         foundFile.Path(),
 				Size:         foundFile.Length(),
-				IsStreamable: isStreamableFile(foundFile.DisplayPath()),
+				IsStreamable: isStreamableFile(foundFile.Path()),
 			}
 
 			return reader, fileInfo, nil

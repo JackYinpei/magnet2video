@@ -1260,24 +1260,11 @@ func shouldRetryCloudUploadFile(file torrentModel.TorrentFile, force bool) bool 
 
 // resolveRetryLocalPath returns the worker-side canonical path for a file.
 // It does NOT touch the local filesystem — server and worker may not even
-// share one. We pick the most likely location from DB-known fields and let
-// the worker fall back / fail with a clear error if it can't find the file.
-//
-//   - Original files: {download_path}/{torrent_name}/{basename(path)} is
-//     anacrolix's default layout. If file.Path is already absolute we trust it.
-//   - Derived (transcoded/extracted) files: file.Path is recorded by the
-//     worker at creation time and is treated as authoritative.
+// share one. We trust file.Path: for original files it's anacrolix's relative
+// path including the torrent root directory; for derived files (transcoded /
+// extracted) the worker recorded it at creation time. If the path is already
+// absolute, leave it alone.
 func resolveRetryLocalPath(torrentRecord torrentModel.Torrent, file torrentModel.TorrentFile) string {
-	if file.Source == "original" || file.Source == "" {
-		if filepath.IsAbs(file.Path) {
-			return file.Path
-		}
-		if torrentRecord.DownloadPath != "" {
-			return filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name, filepath.Base(file.Path))
-		}
-		return file.Path
-	}
-	// Derived: the worker wrote this row, so file.Path is whatever it chose.
 	if filepath.IsAbs(file.Path) || torrentRecord.DownloadPath == "" {
 		return file.Path
 	}
