@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -295,6 +296,22 @@ func (c *Client) StartDownload(ctx context.Context, infoHash string, selectedFil
 		return fmt.Errorf("no files selected for download")
 	}
 
+	// If any data for this torrent already lives on disk, re-hash it before
+	// starting. anacrolix's default file storage uses an in-memory piece
+	// completion map (UsePartFiles=true) that's empty after every restart,
+	// and its OpenTorrent-time `.part` heuristic only credits files whose
+	// `.part` suffix has already been removed (i.e. fully verified). Without
+	// this VerifyData call, a worker restart with a 99%-complete .part file
+	// will redownload the entire thing from scratch.
+	if torrentHasExistingData(c.downloadDir, t) {
+		log.Printf("[torrent] verifying existing data for %s (%s) before resume", t.Name(), infoHash)
+		if err := t.VerifyDataContext(ctx); err != nil {
+			// Don't fail the start — worst case the torrent re-downloads from 0,
+			// which is exactly what would have happened without this call.
+			log.Printf("[torrent] verify existing data failed for %s: %v", infoHash, err)
+		}
+	}
+
 	// No need to create specific directory, the torrent client handles it based on file paths
 	// which are relative to the client's data directory.
 
@@ -314,6 +331,23 @@ func (c *Client) StartDownload(ctx context.Context, infoHash string, selectedFil
 	}
 
 	return nil
+}
+
+// torrentHasExistingData reports whether any of the torrent's files (either
+// the final name or the .part variant anacrolix writes mid-download) already
+// exist on disk under dataDir. Used to decide whether to spend hash-check
+// time on a fresh start vs a resume.
+func torrentHasExistingData(dataDir string, t *torrent.Torrent) bool {
+	for _, f := range t.Files() {
+		p := filepath.Join(dataDir, f.Path())
+		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+			return true
+		}
+		if st, err := os.Stat(p + ".part"); err == nil && st.Size() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // GetTorrentInfo returns torrent information for an existing torrent
@@ -534,6 +568,16 @@ func (c *Client) RestoreTorrent(infoHash string, trackers []string, selectedFile
 	// Async waiting for metadata and starting download
 	go func() {
 		<-t.GotInfo()
+
+		// Re-hash existing on-disk data (see torrentHasExistingData rationale
+		// in StartDownload). Resume-seed in particular always lands here with
+		// fully-downloaded files that anacrolix would otherwise re-fetch.
+		if torrentHasExistingData(c.downloadDir, t) {
+			log.Printf("[torrent] verifying existing data for %s (%s) before resume", t.Name(), infoHash)
+			if err := t.VerifyDataContext(context.Background()); err != nil {
+				log.Printf("[torrent] verify existing data failed for %s: %v", infoHash, err)
+			}
+		}
 
 		// Once we have info, we can select files
 		files := t.Files()
