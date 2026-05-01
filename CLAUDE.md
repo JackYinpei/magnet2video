@@ -90,8 +90,8 @@ goimports -w .
 # 静态分析
 go vet ./...
 
-# 生成 Wire 依赖注入代码
-cd pkg/wire && wire
+# 依赖注入容器为手工维护，无需运行 wire CLI
+# 修改依赖时直接编辑 pkg/wire/container.go
 ```
 
 ---
@@ -162,9 +162,7 @@ magnet-video/
 │   │       └── user_service.go
 │   ├── vo/                     # 视图对象(响应 VO)
 │   └── wire/                   # 依赖注入配置(Wire)
-│       ├── wire.go            # 容器定义
-│       ├── providers.go       # 依赖提供者
-│       └── wire_gen.go        # 自动生成(勿手动编辑)
+│       └── container.go       # 容器定义 + 依赖注入（手工维护，包名沿用 wire）
 ├── web/                        # 前端静态资源(Go embed)
 │   └── static/                # 嵌入式静态文件
 ├── download/                   # BT 下载存储目录
@@ -618,17 +616,15 @@ type TorrentVO struct {
 
 ---
 
-## 依赖注入 (Wire)
+## 依赖注入 (容器构造器)
 
-项目使用 **Google Wire** 实现编译时依赖注入,避免反射开销。
+`pkg/wire/container.go` 提供三种部署模式（all / server / worker）的容器构造器。这是**手工维护**的容器装配——历史上曾使用 [Google Wire](https://github.com/google/wire) 自动生成，但因三种模式需要不同的依赖子集（server 没有 torrent 客户端，worker 没有 DB / Redis），手写更直接，省去 CLI 额外脚手架。
 
-### Wire 文件结构
+### 文件结构
 
 ```
 pkg/wire/
-├── wire.go           # 容器定义(wireinject 构建标签)
-├── wire_gen.go       # 自动生成(勿手动编辑)
-└── providers.go      # 依赖提供者函数
+└── container.go      # 容器结构 + NewContainer/NewServerContainer/NewWorkerContainer
 ```
 
 ### Container 结构
@@ -657,24 +653,9 @@ type Container struct {
 
 ### 添加新依赖的步骤
 
-1. 在 `providers.go` 中添加 Provider 函数:
-```go
-func ProvideFooService(db db.DatabaseManager) service.FooService {
-    return impl.NewFooServiceImpl(db)
-}
-```
+`pkg/wire/container.go` 内有几个 builder helper：`buildShared` / `buildServerInfra` / `buildWorkerInfra` / `buildServerEventPlumbing` / `buildWorkerEventPlumbing` / `buildWorkerHandlers` / `buildServicesAndControllers`。新增依赖时按其归属手动编辑：
 
-2. 将 Provider 添加到 `AllProviders` 集合:
-```go
-var AllProviders = wire.NewSet(
-    InfrastructureProviders,
-    ServiceProviders,
-    ControllerProviders,
-    ProvideFooService, // 新增
-)
-```
-
-3. 在 `wire.go` 的 `Container` 结构体中添加字段:
+1. 在 `Container` 结构体中加字段：
 ```go
 type Container struct {
     // ...
@@ -682,10 +663,17 @@ type Container struct {
 }
 ```
 
-4. 重新生成依赖注入代码:
-```bash
-cd pkg/wire && wire
+2. 在合适的 builder 中构造它（DB-依赖型放 `buildServicesAndControllers`，worker-only 放 `buildWorkerHandlers`，等等）：
+```go
+func buildServicesAndControllers(c *Container, config *configs.Config) {
+    // ...
+    c.FooService = impl.NewFooServiceImpl(c.DatabaseManager)
+}
 ```
+
+3. 选择性地决定哪些模式需要构造它——只在 `NewContainer` 全开，`NewServerContainer` / `NewWorkerContainer` 按需调用对应 builder。
+
+无需运行任何 codegen。
 
 ---
 
@@ -1177,36 +1165,25 @@ func RegisterFooRoutes(container *wire.Container, v1 *gin.RouterGroup) {
 }
 ```
 
-9. **添加 Wire Provider** (`pkg/wire/providers.go`)
-```go
-func ProvideFooService(db db.DatabaseManager) service.FooService {
-    return impl.NewFooServiceImpl(db)
-}
+9. **更新容器构造器** (`pkg/wire/container.go`)
 
-func ProvideFooController(fooService service.FooService) controller.FooController {
-    return controller.NewFooController(fooService)
-}
+在 `Container` 结构体中加字段，并在合适的 builder 里构造：
 
-var AllProviders = wire.NewSet(
-    // ...
-    ProvideFooService,
-    ProvideFooController,
-)
-```
-
-10. **更新 Container** (`pkg/wire/wire.go`)
 ```go
 type Container struct {
     // ...
-    FooController  controller.FooController
-    FooService     service.FooService
+    FooController controller.FooController
+    FooService    service.FooService
+}
+
+func buildServicesAndControllers(c *Container, config *configs.Config) {
+    // ...
+    c.FooService = impl.NewFooServiceImpl(c.DatabaseManager)
+    c.FooController = controller.NewFooController(c.FooService)
 }
 ```
 
-11. **重新生成 Wire 代码**
-```bash
-cd pkg/wire && wire
-```
+容器构造器是手工维护的，**不需要**运行 `wire` CLI。如果该依赖只在 server 模式或 worker 模式使用，把构造逻辑放到对应 builder（`buildServerInfra` / `buildWorkerInfra` 等）即可，相应模式自然不会构造它。
 
 ### 使用 Redis 缓存
 

@@ -21,7 +21,7 @@ magnet2video 是一个企业级 BT 种子下载与视频转码服务，支持磁
 - **Redis**：缓存（Cache-Aside）、Worker 心跳 TTL、事件幂等 SETNX
 - **RabbitMQ / GoChannel**：异步消息队列，支持跨进程事件与任务派发
 - **GCS / S3**：云存储，Signed URL 访问
-- **Wire**：编译时依赖注入（本仓库手工维护 `wire_gen.go`）
+- **Wire**（包名沿用，但 `pkg/wire/container.go` 实际为手工维护的容器构造器）
 - **JWT**：认证鉴权
 - **Logrus** + **file-rotatelogs**：结构化日志与轮转
 - **bwmarrin/snowflake**：分布式 ID
@@ -324,7 +324,7 @@ magnet2video/
 ├── pkg/
 │   ├── router/                  # 路由注册（含 worker 状态接口）
 │   ├── serve/                   # controller + service (DDD 三层)
-│   └── wire/                    # 容器与依赖注入（手写 wire_gen.go）
+│   └── wire/                    # 容器与依赖注入（手写 container.go）
 ├── web/static/                  # 前端资源（含 Worker 状态 Banner）
 ├── build.sh                     # bash 构建脚本
 └── main.go
@@ -335,7 +335,7 @@ magnet2video/
 - 事件幂等：`internal/events/processor` 使用 Redis key `worker:event:seen:<eventID>` 做 SETNX，TTL 5 分钟。
 - 心跳存活：Worker 每 10 秒推送一次心跳，Server 侧 Redis key `worker:status:<id>` TTL 30 秒，超过即判定离线。
 - 进度节流：下载 / 转码 / 上传进度默认 2 秒上报一次，避免刷爆队列。
-- 本仓库 `pkg/wire/wire_gen.go` 为**手工维护**，不要直接重跑 `wire`；修改 Provider 后请同步手改容器构造器。
+- 本仓库 `pkg/wire/container.go` 为**手工维护**的容器构造器（包名 `wire` 是历史遗留）。修改依赖时直接编辑 `buildShared / buildServerInfra / buildWorkerInfra / buildServerEventPlumbing / buildWorkerEventPlumbing / buildWorkerHandlers / buildServicesAndControllers` 即可，无需运行 `wire` CLI。
 
 ## 许可证
 

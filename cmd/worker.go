@@ -112,8 +112,8 @@ func runWorker(cfg *configs.Config) {
 	log.Println("[worker mode] shutting down")
 }
 
-// workerIDFor returns the worker id used for logging only (wire_gen.go has the
-// same logic for dependency injection).
+// workerIDFor returns the worker id used for logging only (pkg/wire/container.go
+// has the same logic for dependency injection).
 func workerIDFor(cfg *configs.Config) string {
 	if cfg.AppConfig.WorkerID != "" {
 		return cfg.AppConfig.WorkerID
