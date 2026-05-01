@@ -163,7 +163,12 @@ func (r *ProgressReporter) publish(ctx context.Context, pr *torrentInternal.Down
 	r.lastStatus[pr.InfoHash] = pr.Status
 	r.mu.Unlock()
 
-	if pr.Status == "completed" && prev != "completed" {
+	// "seeding" implies the download finished and the client is now uploading;
+	// manager.go skips the "completed" status entirely once t.Seeding() is true,
+	// so we must treat both as the completion trigger.
+	isComplete := pr.Status == "completed" || pr.Status == "seeding"
+	wasComplete := prev == "completed" || prev == "seeding"
+	if isComplete && !wasComplete {
 		_ = r.gateway.DownloadCompleted(ctx, pr.InfoHash)
 	}
 }
