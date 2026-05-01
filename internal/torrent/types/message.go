@@ -5,8 +5,10 @@ package types
 
 // Topic names for queue messages owned by this package.
 const (
-	TopicDownloadJobs = "download-jobs"
-	TopicFileOps      = "file-ops-jobs"
+	TopicDownloadJobs       = "download-jobs"
+	TopicFileOps            = "file-ops-jobs"
+	TopicParseMagnetJobs    = "parse-magnet-jobs"
+	TopicParseMagnetResults = "parse-magnet-results"
 )
 
 // File-op kinds. The worker is the only party that owns the download
@@ -40,4 +42,31 @@ type FileOpMessage struct {
 	TorrentName  string   `json:"torrent_name"`  // used for FileOpDeleteTorrentDir
 	Paths        []string `json:"paths"`         // used for FileOpDeletePaths / FileOpDeleteDerived
 	CreatorID    int64    `json:"creator_id"`    // for audit/log
+}
+
+// ParseMagnetRequest is sent server→worker. RequestID is the correlation id
+// used to route the response back to the waiting HTTP request goroutine.
+type ParseMagnetRequest struct {
+	RequestID string   `json:"request_id"`
+	MagnetURI string   `json:"magnet_uri"`
+	Trackers  []string `json:"trackers"`
+}
+
+// ParseMagnetFile mirrors internal/torrent.FileInfo for transport.
+type ParseMagnetFile struct {
+	Path         string `json:"path"`
+	Size         int64  `json:"size"`
+	IsStreamable bool   `json:"is_streamable"`
+}
+
+// ParseMagnetResult is sent worker→server in reply to a ParseMagnetRequest.
+// On error Files is empty and ErrorMsg holds the failure reason.
+type ParseMagnetResult struct {
+	RequestID string            `json:"request_id"`
+	WorkerID  string            `json:"worker_id"`
+	InfoHash  string            `json:"info_hash"`
+	Name      string            `json:"name"`
+	TotalSize int64             `json:"total_size"`
+	Files     []ParseMagnetFile `json:"files"`
+	ErrorMsg  string            `json:"error_msg"`
 }

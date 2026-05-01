@@ -26,6 +26,11 @@ const (
 	// TTLPublicList 公共 torrent 列表缓存的 TTL
 	// 设置稍长因为所有用户共享
 	TTLPublicList = 1 * time.Minute
+
+	// TTLParsedMagnet 缓存 ParseMagnet 的元数据 (server↔worker 之间通过 MQ
+	// 完成解析后服务端把结果落到 Redis，StartDownload 直接读取，避免再次去
+	// worker 上解析). 30 分钟足够覆盖用户从看见文件列表到点击下载的间隔。
+	TTLParsedMagnet = 30 * time.Minute
 )
 
 // TorrentListKey 生成用户 torrent 列表的缓存键
@@ -50,6 +55,12 @@ func TorrentDetailKey(infoHash string) string {
 // 格式: torrent:progress:{infoHash}
 func TorrentProgressKey(infoHash string) string {
 	return fmt.Sprintf("%sprogress:%s", PrefixTorrent, infoHash)
+}
+
+// ParsedMagnetKey 生成 ParseMagnet 解析结果的缓存键
+// 格式: torrent:parsed:{infoHash}
+func ParsedMagnetKey(infoHash string) string {
+	return fmt.Sprintf("%sparsed:%s", PrefixTorrent, infoHash)
 }
 
 // InvalidateUserTorrentsPattern 返回用于失效所有用户 torrent 缓存的模式

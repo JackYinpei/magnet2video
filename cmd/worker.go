@@ -80,6 +80,17 @@ func runWorker(cfg *configs.Config) {
 	}
 	defer foConsumer.Close()
 
+	// Parse-magnet consumer: server publishes parse requests, worker resolves
+	// the magnet and publishes the file list back on parse-magnet-results.
+	pmConsumer, err := queue.NewConsumer(cfg, container.ParseMagnetHandler)
+	if err != nil {
+		log.Fatalf("parse-magnet consumer init failed: %v", err)
+	}
+	if err := pmConsumer.Subscribe([]string{torrentTypes.TopicParseMagnetJobs}); err != nil {
+		log.Fatalf("parse-magnet subscribe failed: %v", err)
+	}
+	defer pmConsumer.Close()
+
 	// Re-track any torrents that were active before this worker started (e.g. after restart).
 	// Without this, torrents that finished downloading before the restart would never emit
 	// download.completed, and transcoding / cloud-upload would never be triggered.

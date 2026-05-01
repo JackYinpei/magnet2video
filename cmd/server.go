@@ -48,9 +48,10 @@ func runServer(cfg *configs.Config) {
 	defer cancel()
 
 	consumers := startConsumers(cfg, container, consumerConfig{
-		workerJobs:      false, // server does NOT run torrent/transcode/upload work
-		workerEvents:    true,  // server listens for worker lifecycle events
-		workerHeartbeat: true,  // server listens for worker heartbeats
+		workerJobs:         false, // server does NOT run torrent/transcode/upload work
+		workerEvents:       true,  // server listens for worker lifecycle events
+		workerHeartbeat:    true,  // server listens for worker heartbeats
+		parseMagnetResults: true,  // server waits for parse-magnet replies on this topic
 	})
 	defer closeConsumers(consumers)
 

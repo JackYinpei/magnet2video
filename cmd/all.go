@@ -62,10 +62,11 @@ func runAll(cfg *configs.Config) {
 
 	// All-mode runs every consumer in-process.
 	consumers := startConsumers(cfg, container, consumerConfig{
-		workerJobs:        true,
-		workerEvents:      true,
-		workerHeartbeat:   true,
-		cloudUpload:       cfg.CloudStorageConfig.Enabled,
+		workerJobs:         true,
+		workerEvents:       true,
+		workerHeartbeat:    true,
+		cloudUpload:        cfg.CloudStorageConfig.Enabled,
+		parseMagnetResults: true,
 	})
 	defer closeConsumers(consumers)
 
@@ -115,19 +116,22 @@ func runHTTPServer(cfg *configs.Config, container *wire.Container) {
 
 // consumerConfig toggles which queue consumers to start in this process.
 type consumerConfig struct {
-	workerJobs      bool // transcode-jobs + cloud-upload-jobs + download-jobs (worker-side)
-	workerEvents    bool // worker-events (server-side, writes to DB)
-	workerHeartbeat bool // worker-heartbeat (server-side, writes to Redis)
-	cloudUpload     bool // cloud-upload-jobs consumer active (required for uploads)
+	workerJobs         bool // transcode-jobs + cloud-upload-jobs + download-jobs + parse-magnet-jobs + file-ops-jobs (worker-side)
+	workerEvents       bool // worker-events (server-side, writes to DB)
+	workerHeartbeat    bool // worker-heartbeat (server-side, writes to Redis)
+	cloudUpload        bool // cloud-upload-jobs consumer active (required for uploads)
+	parseMagnetResults bool // parse-magnet-results (server-side, routes replies into ParseMagnetBus)
 }
 
 type runningConsumers struct {
-	transcode    queue.Consumer
-	cloudUpload  queue.Consumer
-	downloadJobs queue.Consumer
-	fileOps      queue.Consumer
-	workerEvents queue.Consumer
-	heartbeat    queue.Consumer
+	transcode          queue.Consumer
+	cloudUpload        queue.Consumer
+	downloadJobs       queue.Consumer
+	fileOps            queue.Consumer
+	parseMagnetJobs    queue.Consumer
+	parseMagnetResults queue.Consumer
+	workerEvents       queue.Consumer
+	heartbeat          queue.Consumer
 }
 
 func startConsumers(cfg *configs.Config, container *wire.Container, cc consumerConfig) *runningConsumers {
@@ -175,6 +179,28 @@ func startConsumers(cfg *configs.Config, container *wire.Container, cc consumerC
 			out.fileOps = c4
 			log.Println("File-ops consumer started")
 		}
+
+		c5, err := queue.NewConsumer(cfg, container.ParseMagnetHandler)
+		if err != nil {
+			log.Printf("Warning: parse-magnet consumer init failed: %v", err)
+		} else if err := c5.Subscribe([]string{torrentTypes.TopicParseMagnetJobs}); err != nil {
+			log.Printf("Warning: parse-magnet subscribe failed: %v", err)
+		} else {
+			out.parseMagnetJobs = c5
+			log.Println("Parse-magnet consumer started")
+		}
+	}
+
+	if cc.parseMagnetResults {
+		c, err := queue.NewConsumer(cfg, container.ParseMagnetResultsConsumer)
+		if err != nil {
+			log.Printf("Warning: parse-magnet-results consumer init failed: %v", err)
+		} else if err := c.Subscribe([]string{torrentTypes.TopicParseMagnetResults}); err != nil {
+			log.Printf("Warning: parse-magnet-results subscribe failed: %v", err)
+		} else {
+			out.parseMagnetResults = c
+			log.Println("Parse-magnet-results consumer started")
+		}
 	}
 
 	if cc.workerEvents {
@@ -208,7 +234,7 @@ func closeConsumers(c *runningConsumers) {
 	if c == nil {
 		return
 	}
-	for _, consumer := range []queue.Consumer{c.transcode, c.cloudUpload, c.downloadJobs, c.fileOps, c.workerEvents, c.heartbeat} {
+	for _, consumer := range []queue.Consumer{c.transcode, c.cloudUpload, c.downloadJobs, c.fileOps, c.parseMagnetJobs, c.parseMagnetResults, c.workerEvents, c.heartbeat} {
 		if consumer != nil {
 			_ = consumer.Close()
 		}

@@ -26,6 +26,8 @@ import (
 	torrentModel "magnet2video/internal/model/torrent"
 	"magnet2video/internal/queue"
 	"magnet2video/internal/torrent"
+	"magnet2video/internal/torrent/replybus"
+	torrentTypes "magnet2video/internal/torrent/types"
 	"magnet2video/internal/types/consts"
 	"magnet2video/pkg/serve/controller/dto"
 	"magnet2video/pkg/serve/service"
@@ -40,6 +42,7 @@ type TorrentServiceImpl struct {
 	torrentManager   torrent.TorrentManager
 	cacheManager     cache.CacheManager
 	queueProducer    queue.Producer
+	parseMagnetBus   *replybus.ParseMagnetBus
 	transcodeChecker service.TranscodeChecker // Lazy-loaded to avoid circular dependency
 }
 
@@ -51,6 +54,7 @@ func NewTorrentService(
 	torrentManager torrent.TorrentManager,
 	cacheManager cache.CacheManager,
 	queueProducer queue.Producer,
+	parseMagnetBus *replybus.ParseMagnetBus,
 ) *TorrentServiceImpl {
 	instance := &TorrentServiceImpl{
 		config:         config,
@@ -59,6 +63,7 @@ func NewTorrentService(
 		torrentManager: torrentManager,
 		cacheManager:   cacheManager,
 		queueProducer:  queueProducer,
+		parseMagnetBus: parseMagnetBus,
 	}
 
 	// In server mode the download engine runs on the worker; skip restore here.
@@ -67,11 +72,6 @@ func NewTorrentService(
 	}
 
 	return instance
-}
-
-// isServerOnly reports whether this process should delegate download work to a worker.
-func (ts *TorrentServiceImpl) isServerOnly() bool {
-	return ts.config != nil && ts.config.AppConfig.Mode == configs.ModeServer
 }
 
 // publishDownloadJob publishes a download control message to the download-jobs topic.
@@ -141,60 +141,123 @@ func (ts *TorrentServiceImpl) checkPendingTranscodes() {
 	}
 }
 
-// ParseMagnet parses a magnet URI and returns available files
+// ParseMagnet parses a magnet URI and returns available files.
+//
+// Server-side this never touches the local torrent client. Even in mode=all
+// where the worker is co-located in-process, we route through the MQ so the
+// code path is identical to mode=server. The worker's ParseMagnetHandler
+// resolves the magnet and publishes the result on parse-magnet-results;
+// this goroutine waits on the bus channel until the response or context
+// deadline arrives.
 func (ts *TorrentServiceImpl) ParseMagnet(c *gin.Context, req *dto.ParseMagnetRequest) (*vo.ParseMagnetResponse, error) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
-	defer cancel()
-
-	client := ts.torrentManager.Client()
-
-	torrentInfo, err := client.ParseMagnet(ctx, req.MagnetURI, req.Trackers)
+	result, err := ts.parseViaWorker(c.Request.Context(), req.MagnetURI, req.Trackers)
 	if err != nil {
-		ts.loggerManager.Logger().Errorf("failed to parse magnet URI: %v", err)
 		return nil, err
 	}
 
-	// Convert to response format
-	files := make([]vo.TorrentFileInfo, len(torrentInfo.Files))
-	for i, file := range torrentInfo.Files {
+	files := make([]vo.TorrentFileInfo, len(result.Files))
+	for i, f := range result.Files {
 		files[i] = vo.TorrentFileInfo{
 			Index:        i,
-			Path:         file.Path,
-			Size:         file.Size,
-			SizeReadable: formatSize(file.Size),
-			IsStreamable: file.IsStreamable,
+			Path:         f.Path,
+			Size:         f.Size,
+			SizeReadable: formatSize(f.Size),
+			IsStreamable: f.IsStreamable,
 		}
 	}
 
 	return &vo.ParseMagnetResponse{
-		InfoHash:  torrentInfo.InfoHash,
-		Name:      torrentInfo.Name,
-		TotalSize: torrentInfo.TotalSize,
+		InfoHash:  result.InfoHash,
+		Name:      result.Name,
+		TotalSize: result.TotalSize,
 		Files:     files,
 	}, nil
 }
 
-// StartDownload starts downloading selected files. In server mode the actual
-// download runs on a remote worker — we publish a download-jobs message
-// instead of invoking the local torrent client.
-func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownloadRequest) (*vo.StartDownloadResponse, error) {
-	ctx := c.Request.Context()
-	client := ts.torrentManager.Client()
+// parseViaWorker dispatches a parse-magnet job to the worker pool and waits
+// for the reply. On success the result is cached so StartDownload can avoid
+// a second round-trip.
+func (ts *TorrentServiceImpl) parseViaWorker(parentCtx context.Context, magnetURI string, trackers []string) (*torrentTypes.ParseMagnetResult, error) {
+	if ts.parseMagnetBus == nil || ts.queueProducer == nil {
+		return nil, errors.New("parse-magnet bus not configured")
+	}
 
-	// Always start the download locally unless mode=server (where torrent
-	// execution belongs to the remote worker).
-	if !ts.isServerOnly() {
-		if err := client.StartDownload(ctx, req.InfoHash, req.SelectedFiles, req.Trackers); err != nil {
-			ts.loggerManager.Logger().Errorf("failed to start download: %v", err)
-			return nil, err
+	// 120s overall budget, leaving the worker its own 90s parse timeout.
+	ctx, cancel := context.WithTimeout(parentCtx, 120*time.Second)
+	defer cancel()
+
+	requestID := eventTypes.GenerateEventID()
+	resultCh := ts.parseMagnetBus.Register(requestID)
+
+	jobBytes, err := json.Marshal(torrentTypes.ParseMagnetRequest{
+		RequestID: requestID,
+		MagnetURI: magnetURI,
+		Trackers:  trackers,
+	})
+	if err != nil {
+		ts.parseMagnetBus.Cancel(requestID)
+		return nil, fmt.Errorf("marshal parse-magnet request: %w", err)
+	}
+	if err := ts.queueProducer.Send(ctx, torrentTypes.TopicParseMagnetJobs, nil, jobBytes); err != nil {
+		ts.parseMagnetBus.Cancel(requestID)
+		ts.loggerManager.Logger().Errorf("publish parse-magnet job: %v", err)
+		return nil, fmt.Errorf("publish parse-magnet job: %w", err)
+	}
+
+	result, err := ts.parseMagnetBus.Wait(ctx, requestID, resultCh)
+	if err != nil {
+		ts.loggerManager.Logger().Warnf("parse-magnet timeout: requestID=%s magnet=%s", requestID, magnetURI)
+		return nil, fmt.Errorf("parse magnet: %w", err)
+	}
+	if result.ErrorMsg != "" {
+		ts.loggerManager.Logger().Errorf("parse-magnet worker error: requestID=%s err=%s", requestID, result.ErrorMsg)
+		return nil, errors.New(result.ErrorMsg)
+	}
+
+	// Cache the result so StartDownload (and other parse-then-act flows)
+	// can avoid bouncing the worker again. Best-effort.
+	if ts.cacheManager != nil && result.InfoHash != "" {
+		cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cacheCancel()
+		if cacheErr := ts.cacheManager.Set(cacheCtx, cache.ParsedMagnetKey(result.InfoHash), result, cache.TTLParsedMagnet); cacheErr != nil {
+			ts.loggerManager.Logger().Warnf("cache parse-magnet result: %v", cacheErr)
 		}
 	}
 
-	// Get torrent info including files. In server mode the server still has a
-	// local client pre-loaded via ParseMagnet, so this lookup still works.
-	torrentInfo, err := client.GetTorrentInfo(req.InfoHash)
+	return result, nil
+}
+
+// fetchTorrentMetadata returns the cached parse-magnet result for an
+// infoHash, falling back to a fresh worker round-trip if the cache has
+// expired.
+func (ts *TorrentServiceImpl) fetchTorrentMetadata(ctx context.Context, infoHash, magnetURI string, trackers []string) (*torrentTypes.ParseMagnetResult, error) {
+	if ts.cacheManager != nil && infoHash != "" {
+		var cached torrentTypes.ParseMagnetResult
+		if err := ts.cacheManager.Get(ctx, cache.ParsedMagnetKey(infoHash), &cached); err == nil {
+			return &cached, nil
+		}
+	}
+	if magnetURI == "" {
+		magnetURI = magnetURIFor(infoHash, trackers)
+	}
+	return ts.parseViaWorker(ctx, magnetURI, trackers)
+}
+
+// StartDownload kicks off a BT download. Since PR2 the server NEVER drives
+// the local torrent client directly even in mode=all — it always publishes
+// a download-jobs message and the worker (in-process for mode=all, remote
+// for mode=server) handles it. File metadata comes from the parse cache or,
+// on a miss, a fresh parse round-trip.
+func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownloadRequest) (*vo.StartDownloadResponse, error) {
+	ctx := c.Request.Context()
+
+	// Get the torrent metadata (file list, sizes, name) — from cache when
+	// possible, falling back to a worker round-trip. We don't hit the local
+	// torrent client because in mode=server it doesn't have the metadata
+	// loaded, and in mode=all the worker is the source of truth anyway.
+	torrentInfo, err := ts.fetchTorrentMetadata(ctx, req.InfoHash, "", req.Trackers)
 	if err != nil {
-		ts.loggerManager.Logger().Errorf("failed to get torrent info: %v", err)
+		ts.loggerManager.Logger().Errorf("failed to fetch torrent metadata: %v", err)
 		return nil, err
 	}
 
@@ -228,6 +291,21 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 	// Get current user ID from context
 	userID := auth.GetUserID(c)
 
+	// Resolve a download path string to persist on the torrent record. In
+	// mode=all the local torrent client is the source of truth; in
+	// mode=server we fall back to whatever the config says. This is purely
+	// for display / "where does this torrent live" — actual writes happen
+	// on the worker.
+	var downloadPath string
+	if ts.torrentManager != nil {
+		if cl := ts.torrentManager.Client(); cl != nil {
+			downloadPath = cl.GetDownloadDir()
+		}
+	}
+	if downloadPath == "" {
+		downloadPath = ts.config.TorrentConfig.DownloadDir
+	}
+
 	if result.Error == gorm.ErrRecordNotFound {
 		// Create new torrent record
 		newTorrent := &torrentModel.Torrent{
@@ -235,7 +313,7 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 			Name:         torrentInfo.Name,
 			TotalSize:    torrentInfo.TotalSize,
 			Files:        files,
-			DownloadPath: ts.torrentManager.Client().GetDownloadDir(),
+			DownloadPath: downloadPath,
 			Status:       torrentModel.StatusDownloading,
 			Progress:     0,
 			Trackers:     torrentModel.StringSlice(req.Trackers),
@@ -294,19 +372,19 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 	// 数据库更新成功后失效缓存
 	ts.invalidateTorrentListCache(userID)
 
-	// If mode=server, dispatch the actual download to a worker via MQ.
-	if ts.isServerOnly() {
-		err := ts.publishDownloadJob(ctx, eventTypes.DownloadJob{
-			Action:        eventTypes.DownloadActionStart,
-			InfoHash:      req.InfoHash,
-			MagnetURI:     magnetURIFor(req.InfoHash, req.Trackers),
-			SelectedFiles: req.SelectedFiles,
-			Trackers:      req.Trackers,
-		})
-		if err != nil {
-			ts.loggerManager.Logger().Errorf("failed to publish download job: %v", err)
-			return nil, err
-		}
+	// Always dispatch the download command via MQ. In mode=all the worker is
+	// in the same process so the GoChannel queue delivers it locally; in
+	// mode=server it goes out over RabbitMQ. Either way the server never
+	// drives the torrent client directly.
+	if err := ts.publishDownloadJob(ctx, eventTypes.DownloadJob{
+		Action:        eventTypes.DownloadActionStart,
+		InfoHash:      req.InfoHash,
+		MagnetURI:     magnetURIFor(req.InfoHash, req.Trackers),
+		SelectedFiles: req.SelectedFiles,
+		Trackers:      req.Trackers,
+	}); err != nil {
+		ts.loggerManager.Logger().Errorf("failed to publish download job: %v", err)
+		return nil, err
 	}
 
 	return &vo.StartDownloadResponse{
@@ -315,84 +393,48 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 	}, nil
 }
 
-// GetProgress returns download progress for a torrent
+// GetProgress returns download progress for a torrent. Always reads from
+// the heartbeat-fed cache + DB — the worker is the source of truth and the
+// server should never query the local torrent client even in mode=all.
 func (ts *TorrentServiceImpl) GetProgress(c *gin.Context, req *dto.GetProgressRequest) (*vo.DownloadProgressResponse, error) {
-	if ts.isServerOnly() {
-		if progress, ok := ts.cachedDownloadProgress(c.Request.Context(), req.InfoHash); ok {
-			return &vo.DownloadProgressResponse{
-				InfoHash:              progress.InfoHash,
-				Name:                  progress.Name,
-				TotalSize:             progress.TotalSize,
-				DownloadedSize:        progress.DownloadedSize,
-				Progress:              progress.Progress,
-				Status:                progress.Status,
-				Peers:                 progress.Peers,
-				Seeds:                 progress.Seeds,
-				DownloadSpeed:         progress.DownloadSpeed,
-				DownloadSpeedReadable: formatSpeed(progress.DownloadSpeed),
-			}, nil
-		}
-
-		var t torrentModel.Torrent
-		if err := ts.dbManager.DB().Where("info_hash = ? AND deleted = ?", req.InfoHash, false).First(&t).Error; err != nil {
-			return nil, err
-		}
+	if progress, ok := ts.cachedDownloadProgress(c.Request.Context(), req.InfoHash); ok {
 		return &vo.DownloadProgressResponse{
-			InfoHash:              t.InfoHash,
-			Name:                  t.Name,
-			TotalSize:             t.TotalSize,
-			Progress:              t.Progress,
-			Status:                statusStringFromModel(t.Status),
-			DownloadSpeed:         0,
-			DownloadSpeedReadable: formatSpeed(0),
+			InfoHash:              progress.InfoHash,
+			Name:                  progress.Name,
+			TotalSize:             progress.TotalSize,
+			DownloadedSize:        progress.DownloadedSize,
+			Progress:              progress.Progress,
+			Status:                progress.Status,
+			Peers:                 progress.Peers,
+			Seeds:                 progress.Seeds,
+			DownloadSpeed:         progress.DownloadSpeed,
+			DownloadSpeedReadable: formatSpeed(progress.DownloadSpeed),
 		}, nil
 	}
 
-	client := ts.torrentManager.Client()
-
-	progress, err := client.GetProgress(req.InfoHash)
-	if err != nil {
-		ts.loggerManager.Logger().Errorf("failed to get progress: %v", err)
+	var t torrentModel.Torrent
+	if err := ts.dbManager.DB().Where("info_hash = ? AND deleted = ?", req.InfoHash, false).First(&t).Error; err != nil {
 		return nil, err
 	}
-
-	// Update database with progress
-	if err := ts.dbManager.DB().Model(&torrentModel.Torrent{}).
-		Where("info_hash = ?", req.InfoHash).
-		Updates(map[string]any{
-			"progress": progress.Progress,
-			"status":   getStatusFromString(progress.Status),
-		}).Error; err != nil {
-		ts.loggerManager.Logger().Warnf("failed to update torrent progress in database: %v", err)
-	}
-
 	return &vo.DownloadProgressResponse{
-		InfoHash:              progress.InfoHash,
-		Name:                  progress.Name,
-		TotalSize:             progress.TotalSize,
-		DownloadedSize:        progress.DownloadedSize,
-		Progress:              progress.Progress,
-		Status:                progress.Status,
-		Peers:                 progress.Peers,
-		Seeds:                 progress.Seeds,
-		DownloadSpeed:         progress.DownloadSpeed,
-		DownloadSpeedReadable: formatSpeed(progress.DownloadSpeed),
+		InfoHash:              t.InfoHash,
+		Name:                  t.Name,
+		TotalSize:             t.TotalSize,
+		Progress:              t.Progress,
+		Status:                statusStringFromModel(t.Status),
+		DownloadSpeed:         0,
+		DownloadSpeedReadable: formatSpeed(0),
 	}, nil
 }
 
-// PauseDownload pauses a torrent download
+// PauseDownload pauses a torrent download. Always dispatched via MQ — the
+// server never drives the torrent client directly.
 func (ts *TorrentServiceImpl) PauseDownload(c *gin.Context, req *dto.PauseDownloadRequest) (*vo.PauseDownloadResponse, error) {
-	if ts.isServerOnly() {
-		_ = ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-			Action:   eventTypes.DownloadActionPause,
-			InfoHash: req.InfoHash,
-		})
-	} else {
-		client := ts.torrentManager.Client()
-		if err := client.PauseDownload(req.InfoHash); err != nil {
-			ts.loggerManager.Logger().Errorf("failed to pause download: %v", err)
-			return nil, err
-		}
+	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
+		Action:   eventTypes.DownloadActionPause,
+		InfoHash: req.InfoHash,
+	}); err != nil {
+		ts.loggerManager.Logger().Errorf("publish pause job: %v", err)
 	}
 
 	// Update database
@@ -410,20 +452,14 @@ func (ts *TorrentServiceImpl) PauseDownload(c *gin.Context, req *dto.PauseDownlo
 	}, nil
 }
 
-// ResumeDownload resumes a paused torrent download
+// ResumeDownload resumes a paused torrent download. Always dispatched via MQ.
 func (ts *TorrentServiceImpl) ResumeDownload(c *gin.Context, req *dto.ResumeDownloadRequest) (*vo.ResumeDownloadResponse, error) {
-	if ts.isServerOnly() {
-		_ = ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-			Action:        eventTypes.DownloadActionResume,
-			InfoHash:      req.InfoHash,
-			SelectedFiles: req.SelectedFiles,
-		})
-	} else {
-		client := ts.torrentManager.Client()
-		if err := client.ResumeDownload(req.InfoHash, req.SelectedFiles); err != nil {
-			ts.loggerManager.Logger().Errorf("failed to resume download: %v", err)
-			return nil, err
-		}
+	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
+		Action:        eventTypes.DownloadActionResume,
+		InfoHash:      req.InfoHash,
+		SelectedFiles: req.SelectedFiles,
+	}); err != nil {
+		ts.loggerManager.Logger().Errorf("publish resume job: %v", err)
 	}
 
 	// Update database
@@ -440,20 +476,14 @@ func (ts *TorrentServiceImpl) ResumeDownload(c *gin.Context, req *dto.ResumeDown
 	}, nil
 }
 
-// RemoveTorrent removes a torrent from the system
+// RemoveTorrent removes a torrent from the system. Always dispatched via MQ.
 func (ts *TorrentServiceImpl) RemoveTorrent(c *gin.Context, req *dto.RemoveTorrentRequest) (*vo.RemoveTorrentResponse, error) {
-	if ts.isServerOnly() {
-		_ = ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-			Action:      eventTypes.DownloadActionRemove,
-			InfoHash:    req.InfoHash,
-			DeleteFiles: req.DeleteFiles,
-		})
-	} else {
-		client := ts.torrentManager.Client()
-		if err := client.RemoveTorrent(req.InfoHash, req.DeleteFiles); err != nil {
-			ts.loggerManager.Logger().Errorf("failed to remove torrent: %v", err)
-			return nil, err
-		}
+	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
+		Action:      eventTypes.DownloadActionRemove,
+		InfoHash:    req.InfoHash,
+		DeleteFiles: req.DeleteFiles,
+	}); err != nil {
+		ts.loggerManager.Logger().Errorf("publish remove job: %v", err)
 	}
 
 	// Remove from database (soft delete)
@@ -638,38 +668,10 @@ func (ts *TorrentServiceImpl) torrentListToItems(ctx context.Context, torrents [
 			applyCachedProgress(&items[i], progress)
 			continue
 		}
-
-		// Mix in local real-time stats when this process owns the torrent client.
-		if ts.isServerOnly() {
-			continue
-		}
-		if t.Status == torrentModel.StatusDownloading || t.Status == torrentModel.StatusCompleted {
-			if progress, err := ts.torrentManager.Client().GetProgress(t.InfoHash); err == nil {
-				items[i].Progress = progress.Progress
-				items[i].DownloadSpeed = progress.DownloadSpeed
-				items[i].DownloadSpeedReadable = formatSpeed(progress.DownloadSpeed)
-
-				// Check if download just completed (was downloading, now completed)
-				if t.Status == torrentModel.StatusDownloading && progress.Status == "completed" {
-					// Update database status
-					ts.dbManager.DB().Model(&torrentModel.Torrent{}).
-						Where("info_hash = ?", t.InfoHash).
-						Updates(map[string]any{
-							"status":   torrentModel.StatusCompleted,
-							"progress": 100,
-						})
-
-					// Update local item
-					items[i].Status = torrentModel.StatusCompleted
-					items[i].Progress = 100
-
-					// Trigger transcode check asynchronously
-					if ts.transcodeChecker != nil {
-						go ts.transcodeChecker.TriggerTranscodeCheck(t.ID)
-					}
-				}
-			}
-		}
+		// No cached progress: fall back to whatever DB already says. The
+		// server intentionally does not query the local torrent client even
+		// in mode=all — the worker publishes progress via the heartbeat /
+		// download-progress topics every ~2s, which is fresh enough.
 	}
 	return items
 }

@@ -27,6 +27,7 @@ import (
 	"magnet2video/internal/tmdb"
 	"magnet2video/internal/torrent"
 	torrentHandler "magnet2video/internal/torrent/handler"
+	"magnet2video/internal/torrent/replybus"
 	transcodeHandler "magnet2video/internal/transcode/handler"
 
 	"magnet2video/pkg/serve/controller"
@@ -62,10 +63,15 @@ type Container struct {
 	ProgressReporter   *torrentHandler.ProgressReporter
 
 	// --- Worker-side handlers ---
-	TranscodeHandler   *transcodeHandler.TranscodeHandler
-	CloudUploadHandler *cloudHandler.CloudUploadHandler
-	DownloadJobHandler *torrentHandler.DownloadJobHandler
-	FileOpsHandler     *torrentHandler.FileOpsHandler
+	TranscodeHandler           *transcodeHandler.TranscodeHandler
+	CloudUploadHandler         *cloudHandler.CloudUploadHandler
+	DownloadJobHandler         *torrentHandler.DownloadJobHandler
+	FileOpsHandler             *torrentHandler.FileOpsHandler
+	ParseMagnetHandler         *torrentHandler.ParseMagnetHandler
+
+	// --- Server-side parse-magnet reply plumbing ---
+	ParseMagnetBus             *replybus.ParseMagnetBus
+	ParseMagnetResultsConsumer *torrentHandler.ParseMagnetResultsConsumer
 
 	// --- Controllers (server/all only) ---
 	TestController    *controller.TestController
@@ -202,13 +208,23 @@ func buildWorkerHandlers(c *Container, config *configs.Config) {
 	c.CloudUploadHandler = cloudHandler.NewCloudUploadHandler(config, c.LoggerManager, c.WorkerGateway, c.CloudStorageManager, c.QueueProducer)
 	c.DownloadJobHandler = torrentHandler.NewDownloadJobHandler(config, c.LoggerManager, c.TorrentManager, c.WorkerGateway, c.ProgressReporter)
 	c.FileOpsHandler = torrentHandler.NewFileOpsHandler(config, c.LoggerManager, c.WorkerGateway)
+	c.ParseMagnetHandler = torrentHandler.NewParseMagnetHandler(c.LoggerManager, c.TorrentManager, c.WorkerGateway, c.QueueProducer)
 }
 
 func buildServicesAndControllers(c *Container, config *configs.Config) {
 	testService := impl.NewTestService(c.LoggerManager, c.RedisManager, c.AIManager)
 	c.TestController = controller.NewTestController(testService, c.SSEManager)
 
-	torrentSvc := impl.NewTorrentService(config, c.LoggerManager, c.DatabaseManager, c.TorrentManager, c.CacheManager, c.QueueProducer)
+	// Parse-magnet reply plumbing lives wherever ParseMagnet is invoked
+	// (mode=all + mode=server). Worker-only mode never builds this.
+	if c.ParseMagnetBus == nil {
+		c.ParseMagnetBus = replybus.NewParseMagnetBus()
+	}
+	if c.ParseMagnetResultsConsumer == nil {
+		c.ParseMagnetResultsConsumer = torrentHandler.NewParseMagnetResultsConsumer(c.LoggerManager, c.ParseMagnetBus)
+	}
+
+	torrentSvc := impl.NewTorrentService(config, c.LoggerManager, c.DatabaseManager, c.TorrentManager, c.CacheManager, c.QueueProducer, c.ParseMagnetBus)
 	c.TorrentService = torrentSvc
 
 	transcodeSvc := impl.NewTranscodeService(config, c.LoggerManager, c.DatabaseManager, c.TorrentManager, c.QueueProducer)
