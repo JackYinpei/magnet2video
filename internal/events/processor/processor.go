@@ -35,7 +35,18 @@ const (
 	// idempotencyKeyPrefix is the redis key prefix for the SETNX dedup.
 	idempotencyKeyPrefix = "worker:event:seen:"
 	// downloadProgressTTL keeps high-frequency download stats out of MySQL.
-	downloadProgressTTL = 30 * time.Second
+	// Long enough to bridge a worker restart so the UI doesn't briefly
+	// fall back to the stale DB.Progress (which is only sampled, not
+	// updated every event).
+	downloadProgressTTL = 5 * time.Minute
+	// progressPersistInterval bounds how often a single torrent's progress
+	// gets written through to MySQL — once per this window, regardless of
+	// how many progress events arrive in between.
+	progressPersistInterval = 30 * time.Second
+	// progressPersistDeltaPct also forces a write when progress jumps by
+	// at least this many percentage points since the last persisted value
+	// (so a fast-finishing torrent doesn't sit on a stale DB row).
+	progressPersistDeltaPct = 5.0
 )
 
 // WorkerEventProcessor translates worker events into database mutations and
@@ -50,6 +61,17 @@ type WorkerEventProcessor struct {
 
 	progressLogMu sync.Mutex
 	progressLogAt map[string]time.Time
+
+	progressPersistMu sync.Mutex
+	progressPersistAt map[string]progressSample
+}
+
+// progressSample tracks the last value persisted to MySQL for a given
+// infoHash, used to throttle DB writes from the high-frequency progress
+// event stream.
+type progressSample struct {
+	progress  float64
+	timestamp time.Time
 }
 
 // NewWorkerEventProcessor constructs a processor.
@@ -61,12 +83,13 @@ func NewWorkerEventProcessor(
 	queueProducer queue.Producer,
 ) *WorkerEventProcessor {
 	return &WorkerEventProcessor{
-		config:        config,
-		loggerManager: loggerManager,
-		dbManager:     dbManager,
-		redisManager:  redisManager,
-		queueProducer: queueProducer,
-		progressLogAt: make(map[string]time.Time),
+		config:            config,
+		loggerManager:     loggerManager,
+		dbManager:         dbManager,
+		redisManager:      redisManager,
+		queueProducer:     queueProducer,
+		progressLogAt:     make(map[string]time.Time),
+		progressPersistAt: make(map[string]progressSample),
 	}
 }
 
@@ -388,7 +411,44 @@ func (p *WorkerEventProcessor) handleDownloadProgress(ctx context.Context, event
 	} else if p.shouldLogDownloadProgressCache(payload.InfoHash) {
 		p.loggerManager.Logger().Infof("Download progress cached in Redis: key=%s ttl=%s", cache.TorrentProgressKey(payload.InfoHash), downloadProgressTTL)
 	}
+
+	// Throttled write-through to MySQL so reads that fall back to the DB
+	// (cache miss after worker restart, admin views, reports) don't see
+	// 0% for everything that hasn't completed. Only progress is updated
+	// here — status / lifecycle is owned by other event handlers.
+	if p.shouldPersistProgress(payload.InfoHash, payload.Progress) {
+		if err := p.dbManager.DB().Model(&torrentModel.Torrent{}).
+			Where("info_hash = ?", payload.InfoHash).
+			Update("progress", payload.Progress).Error; err != nil {
+			p.loggerManager.Logger().Warnf("failed to persist download progress: %v", err)
+		}
+	}
 	return nil
+}
+
+// shouldPersistProgress decides whether the current progress event warrants
+// a MySQL write. Returns true (and updates internal state) when this is the
+// first sample for the infoHash, the progress moved by at least
+// progressPersistDeltaPct, or progressPersistInterval has elapsed since the
+// last persisted sample.
+func (p *WorkerEventProcessor) shouldPersistProgress(infoHash string, progress float64) bool {
+	p.progressPersistMu.Lock()
+	defer p.progressPersistMu.Unlock()
+	now := time.Now()
+	last, ok := p.progressPersistAt[infoHash]
+	if ok && now.Sub(last.timestamp) < progressPersistInterval &&
+		abs(progress-last.progress) < progressPersistDeltaPct {
+		return false
+	}
+	p.progressPersistAt[infoHash] = progressSample{progress: progress, timestamp: now}
+	return true
+}
+
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 func (p *WorkerEventProcessor) shouldLogDownloadProgress(infoHash string) bool {
