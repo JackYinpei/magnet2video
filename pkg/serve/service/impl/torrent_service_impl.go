@@ -1054,49 +1054,65 @@ func statusStringFromModel(status int) string {
 	}
 }
 
-// restoreTorrents restores active torrents from database
+// restoreTorrents is the startup-time wrapper around RedispatchActiveTorrents.
+// Sleeps briefly so consumers have time to subscribe in mode=all, then
+// performs the full re-dispatch.
 func (ts *TorrentServiceImpl) restoreTorrents() {
 	// Give the server some time to start up
 	time.Sleep(2 * time.Second)
+	ts.loggerManager.Logger().Info("Startup torrent restoration: re-dispatching active torrents")
+	ts.RedispatchActiveTorrents(context.Background(), "startup")
+}
 
-	ts.loggerManager.Logger().Info("Starting torrent restoration...")
-
+// RedispatchActiveTorrents re-issues download-jobs(start) commands for every
+// torrent whose DB status is Downloading or Completed (so seeding resumes
+// after a worker restart). Intended for two callers:
+//
+//   - Startup: ensure newly-spawned workers pick up unfinished work even if
+//     no event was missed (mode=all on first boot).
+//   - Worker fresh-boot: invoked from the heartbeat consumer when a worker
+//     publishes its first heartbeat — see PR4. The reason argument shows up
+//     in logs to make it obvious which path triggered the dispatch.
+//
+// Torrents with LocalDeleted=true are paused instead of restored; the user
+// explicitly removed their disk copy and we don't want to silently re-grab
+// terabytes of data.
+func (ts *TorrentServiceImpl) RedispatchActiveTorrents(ctx context.Context, reason string) {
 	var torrents []torrentModel.Torrent
-	// Restore Downloading and Completed (for seeding) torrents
-	// StatusDownloading = 1, StatusCompleted = 2
-	err := ts.dbManager.DB().
+	if err := ts.dbManager.DB().
 		Preload("Files", func(db *gorm.DB) *gorm.DB {
 			return db.Order("`index` asc")
 		}).
 		Where("deleted = ? AND status IN ?", false, []int{
 			torrentModel.StatusDownloading,
 			torrentModel.StatusCompleted,
-		}).Find(&torrents).Error
-
-	if err != nil {
-		ts.loggerManager.Logger().Errorf("failed to load torrents for restoration: %v", err)
+		}).Find(&torrents).Error; err != nil {
+		ts.loggerManager.Logger().Errorf("redispatch (%s): load torrents failed: %v", reason, err)
 		return
 	}
 
 	if len(torrents) == 0 {
-		ts.loggerManager.Logger().Info("No torrents to restore")
+		ts.loggerManager.Logger().Infof("redispatch (%s): nothing to do", reason)
 		return
 	}
 
-	ts.loggerManager.Logger().Infof("Found %d torrents to restore", len(torrents))
+	ts.loggerManager.Logger().Infof("redispatch (%s): %d torrent(s) to (re)dispatch", reason, len(torrents))
+
+	dispatchCtx := ctx
+	if dispatchCtx == nil {
+		dispatchCtx = context.Background()
+	}
 
 	for _, t := range torrents {
 		// Skip torrents whose local files have been deleted
 		if t.LocalDeleted {
-			ts.loggerManager.Logger().Infof("Skipping restore for torrent %s (local files deleted)", t.Name)
-			// Mark as paused so it won't be restored again
+			ts.loggerManager.Logger().Infof("redispatch (%s): skip %s (local files deleted)", reason, t.Name)
 			ts.dbManager.DB().Model(&torrentModel.Torrent{}).
 				Where("id = ?", t.ID).
 				Update("status", torrentModel.StatusPaused)
 			continue
 		}
 
-		// Collect selected file indices
 		var selectedFiles []int
 		for _, f := range t.Files {
 			if f.IsSelected {
@@ -1104,22 +1120,17 @@ func (ts *TorrentServiceImpl) restoreTorrents() {
 			}
 		}
 
-		// Re-issue the start command via MQ so the worker (in-process for
-		// mode=all, remote for mode=server in the future when this method
-		// runs there) reloads the torrent. This replaces a direct call into
-		// the local torrent client, keeping the server↔worker boundary
-		// crisp.
-		if err := ts.publishDownloadJob(context.Background(), eventTypes.DownloadJob{
+		if err := ts.publishDownloadJob(dispatchCtx, eventTypes.DownloadJob{
 			Action:        eventTypes.DownloadActionStart,
 			InfoHash:      t.InfoHash,
 			MagnetURI:     magnetURIFor(t.InfoHash, t.Trackers),
 			SelectedFiles: selectedFiles,
 			Trackers:      t.Trackers,
 		}); err != nil {
-			ts.loggerManager.Logger().Errorf("failed to publish restore job for %s: %v", t.InfoHash, err)
-		} else {
-			ts.loggerManager.Logger().Infof("Restore dispatched: %s", t.Name)
+			ts.loggerManager.Logger().Errorf("redispatch (%s): publish failed for %s: %v", reason, t.InfoHash, err)
+			continue
 		}
+		ts.loggerManager.Logger().Infof("redispatch (%s): dispatched %s", reason, t.Name)
 	}
 }
 

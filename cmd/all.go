@@ -57,6 +57,15 @@ func runAll(cfg *configs.Config) {
 	container.EventProcessor.SetTranscodeChecker(container.TranscodeService)
 	log.Println("TranscodeChecker wired into TorrentService + EventProcessor")
 
+	// Same fresh-boot recovery wiring as mode=server. In mode=all the worker
+	// is in-process so this fires on every cold start (the very first
+	// heartbeat carries FreshBoot=true), supplementing the startup
+	// restoreTorrents() goroutine for free.
+	container.HeartbeatConsumer.SetFreshBootHook(func(ctx context.Context, workerID string) {
+		log.Printf("worker %s fresh-boot detected; re-dispatching active torrents", workerID)
+		container.TorrentService.RedispatchActiveTorrents(ctx, "fresh-boot:"+workerID)
+	})
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

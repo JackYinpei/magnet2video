@@ -4,6 +4,7 @@
 package service
 
 import (
+	"context"
 	"io"
 
 	"github.com/gin-gonic/gin"
@@ -46,4 +47,7 @@ type TorrentService interface {
 	UpdatePosterPath(c *gin.Context, infoHash string, posterPath string) (*vo.PosterResponse, error)
 	// BindIMDB binds an IMDB ID to a torrent
 	BindIMDB(c *gin.Context, req *dto.BindIMDBRequest) (*vo.BindIMDBResponse, error)
+	// RedispatchActiveTorrents re-issues download-jobs(start) commands for
+	// every Downloading/Completed torrent. Called on worker fresh-boot.
+	RedispatchActiveTorrents(ctx context.Context, reason string)
 }

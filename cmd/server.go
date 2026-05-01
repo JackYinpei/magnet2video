@@ -44,6 +44,15 @@ func runServer(cfg *configs.Config) {
 	container.EventProcessor.SetTranscodeChecker(container.TranscodeService)
 	log.Println("[server mode] TranscodeChecker wired into EventProcessor")
 
+	// On worker fresh-boot, re-dispatch any torrents that were active before
+	// the restart. The worker forgets in-flight state across restarts (the
+	// torrent client persists nothing useful between processes), so without
+	// this hook every worker reboot would silently drop active downloads.
+	container.HeartbeatConsumer.SetFreshBootHook(func(ctx context.Context, workerID string) {
+		log.Printf("[server mode] worker %s fresh-boot detected; re-dispatching active torrents", workerID)
+		container.TorrentService.RedispatchActiveTorrents(ctx, "fresh-boot:"+workerID)
+	})
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
