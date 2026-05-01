@@ -64,11 +64,12 @@ func (ss StringSlice) Value() (driver.Value, error) {
 
 // TorrentStatus constants
 const (
-	StatusPending     = 0 // Waiting to start
-	StatusDownloading = 1 // Currently downloading
-	StatusCompleted   = 2 // Download completed
-	StatusFailed      = 3 // Download failed
-	StatusPaused      = 4 // Download paused
+	StatusPending        = 0 // Waiting to start
+	StatusDownloading    = 1 // Currently downloading
+	StatusCompleted      = 2 // Download completed
+	StatusFailed         = 3 // Download failed
+	StatusPaused         = 4 // Download paused
+	StatusSeedingStopped = 5 // Removed from swarm by user; local files retained
 )
 
 // Visibility constants

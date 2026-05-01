@@ -35,6 +35,14 @@ const (
 	ModeWorker = "worker" // torrent download + transcode + cloud upload; no DB/Gin
 )
 
+// Queue type constants (QUEUE.TYPE values).
+// GoChannel is in-process only; split mode=server / mode=worker deployments
+// must use RabbitMQ so messages can cross host boundaries.
+const (
+	QueueTypeChannel  = "channel"
+	QueueTypeRabbitMQ = "rabbitmq"
+)
+
 // EmailConfig email configuration
 type EmailConfig struct {
 	EmailType string `mapstructure:"EMAIL_TYPE"` // Email type

@@ -46,10 +46,12 @@ const (
 
 // DownloadAction constants for DownloadJob
 const (
-	DownloadActionStart  = "start"
-	DownloadActionPause  = "pause"
-	DownloadActionResume = "resume"
-	DownloadActionRemove = "remove"
+	DownloadActionStart      = "start"
+	DownloadActionPause      = "pause"
+	DownloadActionResume     = "resume"
+	DownloadActionRemove     = "remove"
+	DownloadActionStopSeed   = "stop_seed"   // Drop torrent from swarm; keep local files
+	DownloadActionResumeSeed = "resume_seed" // Re-add torrent to swarm using existing local files
 )
 
 // WorkerEvent is the envelope for all worker-to-server events

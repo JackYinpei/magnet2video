@@ -394,11 +394,16 @@ func (c *Client) GetProgress(infoHash string) (*DownloadProgress, error) {
 		progress = float64(selectedCompletedBytes) / float64(selectedTotalBytes) * 100
 	}
 
+	// "seeding" implies "downloaded and now uploading"; anacrolix's
+	// t.Seeding() returns true whenever the client is *willing* to upload
+	// (i.e. clientConfig.Seed=true), independent of progress, so we must
+	// gate it on actually being done.
 	status := "downloading"
-	if selectedCompletedBytes >= selectedTotalBytes {
+	if selectedTotalBytes > 0 && selectedCompletedBytes >= selectedTotalBytes {
 		status = "completed"
-	} else if t.Seeding() {
-		status = "seeding"
+		if t.Seeding() {
+			status = "seeding"
+		}
 	}
 
 	// Calculate speed

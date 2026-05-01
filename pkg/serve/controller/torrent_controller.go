@@ -224,6 +224,54 @@ func (tc *TorrentController) RemoveTorrent(c *gin.Context) {
 	c.JSON(http.StatusOK, vo.Success(c, response))
 }
 
+// StopSeed handles stopping seeding (drop torrent from swarm, keep local files)
+// @Router /api/v1/torrent/stop-seed [post]
+func (tc *TorrentController) StopSeed(c *gin.Context) {
+	req := &dto.StopSeedRequest{}
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "bind JSON failed"))))
+		return
+	}
+
+	errors := validator.Validate(req)
+	if errors != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, errors, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "validation failed"))))
+		return
+	}
+
+	response, err := tc.torrentService.StopSeed(c, req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrTorrentNotFound, errorx.KV("info_hash", req.InfoHash))))
+		return
+	}
+
+	c.JSON(http.StatusOK, vo.Success(c, response))
+}
+
+// ResumeSeed handles resuming seeding (re-add torrent to swarm using existing local files)
+// @Router /api/v1/torrent/resume-seed [post]
+func (tc *TorrentController) ResumeSeed(c *gin.Context) {
+	req := &dto.ResumeSeedRequest{}
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, err.Error(), errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "bind JSON failed"))))
+		return
+	}
+
+	errors := validator.Validate(req)
+	if errors != nil {
+		c.JSON(http.StatusBadRequest, vo.Fail(c, errors, errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "validation failed"))))
+		return
+	}
+
+	response, err := tc.torrentService.ResumeSeed(c, req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, vo.Fail(c, err.Error(), errorx.New(errno.ErrTorrentNotFound, errorx.KV("info_hash", req.InfoHash))))
+		return
+	}
+
+	c.JSON(http.StatusOK, vo.Success(c, response))
+}
+
 // ListTorrents handles listing user's torrents
 // @Router /api/v1/torrent/list [get]
 func (tc *TorrentController) ListTorrents(c *gin.Context) {

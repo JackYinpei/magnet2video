@@ -100,6 +100,25 @@ func (h *DownloadJobHandler) Handle(ctx context.Context, msg *queue.Message) err
 		if h.reporter != nil {
 			h.reporter.UntrackTorrent(job.InfoHash)
 		}
+	case eventTypes.DownloadActionStopSeed:
+		// Drop the torrent from the swarm but keep local files on disk.
+		if err := client.RemoveTorrent(job.InfoHash, false); err != nil {
+			h.loggerManager.Logger().Errorf("stop seeding failed: %v", err)
+		}
+		if h.reporter != nil {
+			h.reporter.UntrackTorrent(job.InfoHash)
+		}
+	case eventTypes.DownloadActionResumeSeed:
+		// Re-add the torrent to the swarm. Metadata + file priorities are
+		// resolved asynchronously inside RestoreTorrent.
+		if err := client.RestoreTorrent(job.InfoHash, job.Trackers, job.SelectedFiles); err != nil {
+			h.loggerManager.Logger().Errorf("resume seeding failed: %v", err)
+			_ = h.gateway.DownloadFailed(ctx, job.InfoHash, err.Error())
+			return nil
+		}
+		if h.reporter != nil {
+			h.reporter.TrackTorrent(job.InfoHash)
+		}
 	default:
 		h.loggerManager.Logger().Warnf("unknown download action: %s", job.Action)
 	}

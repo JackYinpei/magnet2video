@@ -751,7 +751,7 @@ func guessContentType(path string) string {
 
 func downloadStatusFromString(status string) int {
 	switch status {
-	case "downloading":
+	case "downloading", "fetching_metadata":
 		return torrentModel.StatusDownloading
 	case "completed", "seeding":
 		return torrentModel.StatusCompleted

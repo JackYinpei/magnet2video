@@ -53,6 +53,12 @@ func RegisterTorrentRoutes(container *wire.Container, v1, v2 *gin.RouterGroup) {
 		// Remove torrent
 		protectedTorrent.POST("/remove", container.TorrentController.RemoveTorrent)
 
+		// Stop seeding (drop from swarm, keep local files)
+		protectedTorrent.POST("/stop-seed", container.TorrentController.StopSeed)
+
+		// Resume seeding (re-add to swarm using existing local files)
+		protectedTorrent.POST("/resume-seed", container.TorrentController.ResumeSeed)
+
 		// List user's own torrents
 		protectedTorrent.GET("/list", container.TorrentController.ListTorrents)
 

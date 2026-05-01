@@ -29,6 +29,10 @@ type TorrentService interface {
 	ResumeDownload(c *gin.Context, req *dto.ResumeDownloadRequest) (*vo.ResumeDownloadResponse, error)
 	// RemoveTorrent removes a torrent from the system
 	RemoveTorrent(c *gin.Context, req *dto.RemoveTorrentRequest) (*vo.RemoveTorrentResponse, error)
+	// StopSeed drops the torrent from the swarm but keeps local files on disk
+	StopSeed(c *gin.Context, req *dto.StopSeedRequest) (*vo.StopSeedResponse, error)
+	// ResumeSeed re-adds the torrent to the swarm using existing local files
+	ResumeSeed(c *gin.Context, req *dto.ResumeSeedRequest) (*vo.ResumeSeedResponse, error)
 	// ListTorrents lists torrents for the current user
 	ListTorrents(c *gin.Context) (*vo.TorrentListResponse, error)
 	// ListPublicTorrents lists all public torrents

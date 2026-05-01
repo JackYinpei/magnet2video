@@ -38,6 +38,16 @@ type RemoveTorrentRequest struct {
 	DeleteFiles bool   `json:"delete_files"`                  // Whether to delete downloaded files
 }
 
+// StopSeedRequest request for stopping seeding (drop from swarm, keep files)
+type StopSeedRequest struct {
+	InfoHash string `json:"info_hash" validate:"required"` // Info hash of the torrent
+}
+
+// ResumeSeedRequest request for resuming seeding (re-add to swarm using local files)
+type ResumeSeedRequest struct {
+	InfoHash string `json:"info_hash" validate:"required"` // Info hash of the torrent
+}
+
 // ServeFileRequest request for serving a file
 type ServeFileRequest struct {
 	InfoHash string `json:"info_hash" validate:"required"` // Info hash of the torrent

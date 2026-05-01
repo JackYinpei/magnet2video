@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"log"
+	"strings"
 
 	"magnet2video/configs"
 )
@@ -33,6 +34,15 @@ func RunMode(mode string) {
 	}
 	if cfg.AppConfig.Mode == "" {
 		cfg.AppConfig.Mode = configs.ModeAll
+	}
+
+	// Split-host deployments cannot use the in-process GoChannel queue —
+	// messages would never reach the other side. Fail fast at boot rather
+	// than silently dropping every download/transcode/upload command.
+	if cfg.AppConfig.Mode != configs.ModeAll &&
+		!strings.EqualFold(cfg.QueueConfig.Type, configs.QueueTypeRabbitMQ) {
+		log.Fatalf("mode=%s requires QUEUE.TYPE=%s (got %q); GoChannel is in-process only and cannot deliver messages between split server/worker hosts",
+			cfg.AppConfig.Mode, configs.QueueTypeRabbitMQ, cfg.QueueConfig.Type)
 	}
 
 	switch cfg.AppConfig.Mode {

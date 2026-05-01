@@ -79,6 +79,18 @@ type RemoveTorrentResponse struct {
 	Message  string `json:"message"`   // Status message
 }
 
+// StopSeedResponse response for stopping seeding
+type StopSeedResponse struct {
+	InfoHash string `json:"info_hash"` // Info hash
+	Message  string `json:"message"`   // Status message
+}
+
+// ResumeSeedResponse response for resuming seeding
+type ResumeSeedResponse struct {
+	InfoHash string `json:"info_hash"` // Info hash
+	Message  string `json:"message"`   // Status message
+}
+
 // CloudFileInfo represents minimal per-file cloud upload info for the list view
 type CloudFileInfo struct {
 	FileIndex         int    `json:"file_index"`                   // File index

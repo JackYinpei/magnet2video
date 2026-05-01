@@ -514,6 +514,73 @@ func (ts *TorrentServiceImpl) RemoveTorrent(c *gin.Context, req *dto.RemoveTorre
 	}, nil
 }
 
+// StopSeed drops the torrent from the swarm on the worker side but keeps the
+// local files on disk. The DB row stays with status=StatusSeedingStopped, which
+// fresh-boot recovery (RedispatchActiveTorrents) skips by design.
+func (ts *TorrentServiceImpl) StopSeed(c *gin.Context, req *dto.StopSeedRequest) (*vo.StopSeedResponse, error) {
+	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
+		Action:   eventTypes.DownloadActionStopSeed,
+		InfoHash: req.InfoHash,
+	}); err != nil {
+		ts.loggerManager.Logger().Errorf("publish stop_seed job: %v", err)
+	}
+
+	if err := ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("info_hash = ?", req.InfoHash).
+		Update("status", torrentModel.StatusSeedingStopped).Error; err != nil {
+		ts.loggerManager.Logger().Warnf("failed to update torrent status in database: %v", err)
+	}
+	ts.deleteCachedDownloadProgress(c.Request.Context(), req.InfoHash)
+	ts.invalidateTorrentListCache(auth.GetUserID(c))
+
+	return &vo.StopSeedResponse{
+		InfoHash: req.InfoHash,
+		Message:  "Seeding stopped successfully",
+	}, nil
+}
+
+// ResumeSeed re-adds the torrent to the worker's swarm. Selected files come
+// from the DB so we don't depend on the caller remembering them.
+func (ts *TorrentServiceImpl) ResumeSeed(c *gin.Context, req *dto.ResumeSeedRequest) (*vo.ResumeSeedResponse, error) {
+	var t torrentModel.Torrent
+	if err := ts.dbManager.DB().
+		Preload("Files", func(db *gorm.DB) *gorm.DB {
+			return db.Order("`index` asc")
+		}).
+		Where("info_hash = ? AND deleted = ?", req.InfoHash, false).
+		First(&t).Error; err != nil {
+		return nil, err
+	}
+
+	var selectedFiles []int
+	for _, f := range t.Files {
+		if f.IsSelected {
+			selectedFiles = append(selectedFiles, f.Index)
+		}
+	}
+
+	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
+		Action:        eventTypes.DownloadActionResumeSeed,
+		InfoHash:      req.InfoHash,
+		SelectedFiles: selectedFiles,
+		Trackers:      t.Trackers,
+	}); err != nil {
+		ts.loggerManager.Logger().Errorf("publish resume_seed job: %v", err)
+	}
+
+	if err := ts.dbManager.DB().Model(&torrentModel.Torrent{}).
+		Where("info_hash = ?", req.InfoHash).
+		Update("status", torrentModel.StatusCompleted).Error; err != nil {
+		ts.loggerManager.Logger().Warnf("failed to update torrent status in database: %v", err)
+	}
+	ts.invalidateTorrentListCache(auth.GetUserID(c))
+
+	return &vo.ResumeSeedResponse{
+		InfoHash: req.InfoHash,
+		Message:  "Seeding resumed successfully",
+	}, nil
+}
+
 // ListTorrents 获取当前用户的 torrent 列表
 // 如果用户已认证，只返回该用户的 torrents
 // 如果未认证，返回空列表
@@ -1026,7 +1093,7 @@ func toRelativePath(absPath, downloadDir string) string {
 
 func getStatusFromString(status string) int {
 	switch status {
-	case "downloading":
+	case "downloading", "fetching_metadata":
 		return torrentModel.StatusDownloading
 	case "completed", "seeding":
 		return torrentModel.StatusCompleted
