@@ -38,6 +38,10 @@ const (
 
 	// Poster candidates
 	EventTypePosterCandidateUploaded = "poster.candidate.uploaded"
+
+	// File ops (filesystem mutations the server requested the worker to perform)
+	EventTypeFileOpCompleted = "file_op.completed"
+	EventTypeFileOpFailed    = "file_op.failed"
 )
 
 // DownloadAction constants for DownloadJob
@@ -172,6 +176,20 @@ type DownloadFailedPayload struct {
 	ErrorMsg string `json:"error_msg"`
 }
 
+// ---- File ops ----
+
+// FileOpResultPayload is emitted by the worker after a file-ops-jobs message.
+// Op + OpID are echoed verbatim from the request.
+type FileOpResultPayload struct {
+	OpID          string `json:"op_id"`
+	Op            string `json:"op"`
+	TorrentID     int64  `json:"torrent_id"`
+	InfoHash      string `json:"info_hash"`
+	DeletedCount  int    `json:"deleted_count"`
+	NotFoundCount int    `json:"not_found_count"`
+	ErrorMsg      string `json:"error_msg"` // empty on success
+}
+
 // ---- Poster candidate ----
 
 type PosterCandidateUploadedPayload struct {
@@ -189,7 +207,12 @@ type Heartbeat struct {
 	Timestamp   int64          `json:"timestamp"`
 	CurrentJobs []HeartbeatJob `json:"current_jobs"`
 	DiskFreeGB  int64          `json:"disk_free_gb"`
+	DiskTotalGB int64          `json:"disk_total_gb"`
 	Version     string         `json:"version"`
+	// FreshBoot is true on the very first heartbeat after worker start. The
+	// server uses this as a trigger to re-dispatch any download/transcode
+	// jobs that were active before the restart.
+	FreshBoot bool `json:"fresh_boot"`
 }
 
 // HeartbeatJob describes an in-flight job on the worker

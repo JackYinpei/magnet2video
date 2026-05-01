@@ -65,6 +65,7 @@ type Container struct {
 	TranscodeHandler   *transcodeHandler.TranscodeHandler
 	CloudUploadHandler *cloudHandler.CloudUploadHandler
 	DownloadJobHandler *torrentHandler.DownloadJobHandler
+	FileOpsHandler     *torrentHandler.FileOpsHandler
 
 	// --- Controllers (server/all only) ---
 	TestController    *controller.TestController
@@ -200,6 +201,7 @@ func buildWorkerHandlers(c *Container, config *configs.Config) {
 	c.TranscodeHandler = transcodeHandler.NewTranscodeHandler(config, c.LoggerManager, c.WorkerGateway)
 	c.CloudUploadHandler = cloudHandler.NewCloudUploadHandler(config, c.LoggerManager, c.WorkerGateway, c.CloudStorageManager, c.QueueProducer)
 	c.DownloadJobHandler = torrentHandler.NewDownloadJobHandler(config, c.LoggerManager, c.TorrentManager, c.WorkerGateway, c.ProgressReporter)
+	c.FileOpsHandler = torrentHandler.NewFileOpsHandler(config, c.LoggerManager, c.WorkerGateway)
 }
 
 func buildServicesAndControllers(c *Container, config *configs.Config) {
@@ -217,7 +219,7 @@ func buildServicesAndControllers(c *Container, config *configs.Config) {
 	userSvc := impl.NewUserService(c.LoggerManager, c.DatabaseManager)
 	c.UserController = controller.NewUserController(userSvc)
 
-	adminSvc := impl.NewAdminService(c.LoggerManager, c.DatabaseManager, c.TorrentManager)
+	adminSvc := impl.NewAdminService(c.LoggerManager, c.DatabaseManager, c.QueueProducer, c.StatusStore)
 	c.AdminController = controller.NewAdminController(adminSvc)
 
 	c.WorkerController = controller.NewWorkerController(c.StatusStore)

@@ -34,6 +34,10 @@ type WorkerGateway interface {
 	// Poster candidates (images found during download/transcode)
 	PosterCandidateUploaded(ctx context.Context, torrentID int64, fileIndex int, filePath, cloudPath string) error
 
+	// File op results (server delegated a fs mutation, worker reports outcome)
+	FileOpCompleted(ctx context.Context, payload eventTypes.FileOpResultPayload) error
+	FileOpFailed(ctx context.Context, payload eventTypes.FileOpResultPayload) error
+
 	// Heartbeat (liveness + current job summary)
 	PublishHeartbeat(ctx context.Context, hb eventTypes.Heartbeat) error
 

@@ -58,13 +58,42 @@ func (s *StatusStore) Record(ctx context.Context, hb *eventTypes.Heartbeat) erro
 
 // WorkerStatus describes one worker's live state for the API.
 type WorkerStatus struct {
-	WorkerID    string                     `json:"worker_id"`
-	Online      bool                       `json:"online"`
-	LastSeen    int64                      `json:"last_seen"`      // unix ms
-	StaleFor    int64                      `json:"stale_for_sec"`  // seconds since last heartbeat
-	Version     string                     `json:"version"`
-	DiskFreeGB  int64                      `json:"disk_free_gb"`
-	CurrentJobs []eventTypes.HeartbeatJob  `json:"current_jobs"`
+	WorkerID    string                    `json:"worker_id"`
+	Online      bool                      `json:"online"`
+	LastSeen    int64                     `json:"last_seen"`     // unix ms
+	StaleFor    int64                     `json:"stale_for_sec"` // seconds since last heartbeat
+	Version     string                    `json:"version"`
+	DiskFreeGB  int64                     `json:"disk_free_gb"`
+	DiskTotalGB int64                     `json:"disk_total_gb"`
+	CurrentJobs []eventTypes.HeartbeatJob `json:"current_jobs"`
+}
+
+// DiskSummary aggregates disk space across all online workers. Used by the
+// admin stats endpoint instead of statfs'ing the local server fs (which has
+// no relation to where files actually live in split deployment).
+type DiskSummary struct {
+	TotalGB int64
+	FreeGB  int64
+	Workers int
+}
+
+// AggregateDisk returns the sum of disk_free / disk_total reported in the
+// most recent heartbeat from each online worker.
+func (s *StatusStore) AggregateDisk(ctx context.Context) DiskSummary {
+	statuses, err := s.List(ctx)
+	if err != nil {
+		return DiskSummary{}
+	}
+	out := DiskSummary{}
+	for _, st := range statuses {
+		if !st.Online {
+			continue
+		}
+		out.Workers++
+		out.FreeGB += st.DiskFreeGB
+		out.TotalGB += st.DiskTotalGB
+	}
+	return out
 }
 
 // List returns the status of every worker ever seen by this server.
@@ -100,6 +129,7 @@ func (s *StatusStore) List(ctx context.Context) ([]WorkerStatus, error) {
 			StaleFor:    (now - hb.Timestamp) / 1000,
 			Version:     hb.Version,
 			DiskFreeGB:  hb.DiskFreeGB,
+			DiskTotalGB: hb.DiskTotalGB,
 			CurrentJobs: hb.CurrentJobs,
 		})
 	}

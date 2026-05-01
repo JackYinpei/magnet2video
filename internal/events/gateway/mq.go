@@ -142,6 +142,16 @@ func (g *mqGateway) PosterCandidateUploaded(ctx context.Context, torrentID int64
 	})
 }
 
+// ---- File ops ----
+
+func (g *mqGateway) FileOpCompleted(ctx context.Context, payload eventTypes.FileOpResultPayload) error {
+	return g.publishEvent(ctx, eventTypes.EventTypeFileOpCompleted, payload)
+}
+
+func (g *mqGateway) FileOpFailed(ctx context.Context, payload eventTypes.FileOpResultPayload) error {
+	return g.publishEvent(ctx, eventTypes.EventTypeFileOpFailed, payload)
+}
+
 // ---- Heartbeat ----
 
 func (g *mqGateway) PublishHeartbeat(ctx context.Context, hb eventTypes.Heartbeat) error {

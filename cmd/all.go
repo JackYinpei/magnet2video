@@ -122,11 +122,12 @@ type consumerConfig struct {
 }
 
 type runningConsumers struct {
-	transcode     queue.Consumer
-	cloudUpload   queue.Consumer
-	downloadJobs  queue.Consumer
-	workerEvents  queue.Consumer
-	heartbeat     queue.Consumer
+	transcode    queue.Consumer
+	cloudUpload  queue.Consumer
+	downloadJobs queue.Consumer
+	fileOps      queue.Consumer
+	workerEvents queue.Consumer
+	heartbeat    queue.Consumer
 }
 
 func startConsumers(cfg *configs.Config, container *wire.Container, cc consumerConfig) *runningConsumers {
@@ -164,6 +165,16 @@ func startConsumers(cfg *configs.Config, container *wire.Container, cc consumerC
 			out.downloadJobs = c3
 			log.Println("Download-jobs consumer started")
 		}
+
+		c4, err := queue.NewConsumer(cfg, container.FileOpsHandler)
+		if err != nil {
+			log.Printf("Warning: file-ops consumer init failed: %v", err)
+		} else if err := c4.Subscribe([]string{torrentTypes.TopicFileOps}); err != nil {
+			log.Printf("Warning: file-ops subscribe failed: %v", err)
+		} else {
+			out.fileOps = c4
+			log.Println("File-ops consumer started")
+		}
 	}
 
 	if cc.workerEvents {
@@ -197,7 +208,7 @@ func closeConsumers(c *runningConsumers) {
 	if c == nil {
 		return
 	}
-	for _, consumer := range []queue.Consumer{c.transcode, c.cloudUpload, c.downloadJobs, c.workerEvents, c.heartbeat} {
+	for _, consumer := range []queue.Consumer{c.transcode, c.cloudUpload, c.downloadJobs, c.fileOps, c.workerEvents, c.heartbeat} {
 		if consumer != nil {
 			_ = consumer.Close()
 		}

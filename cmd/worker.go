@@ -69,6 +69,17 @@ func runWorker(cfg *configs.Config) {
 		defer cuConsumer.Close()
 	}
 
+	// File-ops consumer: server delegates os.Remove / os.RemoveAll to the
+	// worker via this topic so it never has to touch the worker's disk.
+	foConsumer, err := queue.NewConsumer(cfg, container.FileOpsHandler)
+	if err != nil {
+		log.Fatalf("file-ops consumer init failed: %v", err)
+	}
+	if err := foConsumer.Subscribe([]string{torrentTypes.TopicFileOps}); err != nil {
+		log.Fatalf("file-ops subscribe failed: %v", err)
+	}
+	defer foConsumer.Close()
+
 	// Re-track any torrents that were active before this worker started (e.g. after restart).
 	// Without this, torrents that finished downloading before the restart would never emit
 	// download.completed, and transcoding / cloud-upload would never be triggered.

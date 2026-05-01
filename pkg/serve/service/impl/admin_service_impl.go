@@ -4,44 +4,88 @@
 package impl
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"syscall"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
 	"magnet2video/internal/db"
+	"magnet2video/internal/events/heartbeat"
+	eventTypes "magnet2video/internal/events/types"
 	"magnet2video/internal/logger"
 	"magnet2video/internal/middleware/auth"
 	torrentModel "magnet2video/internal/model/torrent"
 	transcodeModel "magnet2video/internal/model/transcode"
 	userModel "magnet2video/internal/model/user"
-	"magnet2video/internal/torrent"
+	"magnet2video/internal/queue"
+	torrentTypes "magnet2video/internal/torrent/types"
 	"magnet2video/pkg/serve/controller/dto"
 	"magnet2video/pkg/serve/service"
 	"magnet2video/pkg/vo"
 )
 
-// AdminServiceImpl admin service implementation
+// AdminServiceImpl admin service implementation.
+//
+// AdminServiceImpl never touches the worker's filesystem or torrent client
+// directly. Removals are dispatched as queue messages (download-jobs for
+// torrent state, file-ops-jobs for derived files), and disk stats come from
+// worker heartbeats via the status store.
 type AdminServiceImpl struct {
-	loggerManager  logger.LoggerManager
-	dbManager      db.DatabaseManager
-	torrentManager torrent.TorrentManager
+	loggerManager logger.LoggerManager
+	dbManager     db.DatabaseManager
+	queueProducer queue.Producer
+	statusStore   *heartbeat.StatusStore
 }
 
 // NewAdminService creates admin service implementation
 func NewAdminService(
 	loggerManager logger.LoggerManager,
 	dbManager db.DatabaseManager,
-	torrentManager torrent.TorrentManager,
+	queueProducer queue.Producer,
+	statusStore *heartbeat.StatusStore,
 ) service.AdminService {
 	return &AdminServiceImpl{
-		loggerManager:  loggerManager,
-		dbManager:      dbManager,
-		torrentManager: torrentManager,
+		loggerManager: loggerManager,
+		dbManager:     dbManager,
+		queueProducer: queueProducer,
+		statusStore:   statusStore,
+	}
+}
+
+// publishDownloadJob sends a download control command to the worker.
+func (as *AdminServiceImpl) publishDownloadJob(ctx context.Context, job eventTypes.DownloadJob) {
+	if as.queueProducer == nil {
+		as.loggerManager.Logger().Warn("queue producer unavailable; download command dropped")
+		return
+	}
+	data, err := json.Marshal(job)
+	if err != nil {
+		as.loggerManager.Logger().Errorf("marshal download job: %v", err)
+		return
+	}
+	if err := as.queueProducer.Send(ctx, eventTypes.TopicDownloadJobs, nil, data); err != nil {
+		as.loggerManager.Logger().Errorf("publish download job failed: action=%s infoHash=%s err=%v",
+			job.Action, job.InfoHash, err)
+	}
+}
+
+// publishFileOp sends a filesystem-mutating command to the worker.
+func (as *AdminServiceImpl) publishFileOp(ctx context.Context, op torrentTypes.FileOpMessage) {
+	if as.queueProducer == nil {
+		as.loggerManager.Logger().Warn("queue producer unavailable; file op dropped")
+		return
+	}
+	data, err := json.Marshal(op)
+	if err != nil {
+		as.loggerManager.Logger().Errorf("marshal file op: %v", err)
+		return
+	}
+	if err := as.queueProducer.Send(ctx, torrentTypes.TopicFileOps, nil, data); err != nil {
+		as.loggerManager.Logger().Errorf("publish file op failed: op=%s torrent=%d err=%v",
+			op.Op, op.TorrentID, err)
 	}
 }
 
@@ -195,18 +239,19 @@ func (as *AdminServiceImpl) DeleteUser(c *gin.Context, userID int64) (*vo.Delete
 		return nil, errors.New("cannot delete super admin account")
 	}
 
-	// Delete user's torrents first
+	// Find user's torrents and dispatch removal commands to the worker.
+	// We do NOT touch the worker's filesystem or torrent client from here;
+	// the worker handles RemoveTorrent (action=remove + DeleteFiles=true)
+	// which both untracks the torrent and deletes its on-disk files.
 	var torrents []torrentModel.Torrent
 	as.dbManager.DB().Where("creator_id = ?", userID).Find(&torrents)
-
+	ctx := c.Request.Context()
 	for _, t := range torrents {
-		// Remove from torrent client
-		as.torrentManager.Client().RemoveTorrent(t.InfoHash, true)
-
-		// Delete download files
-		if t.DownloadPath != "" {
-			os.RemoveAll(t.DownloadPath)
-		}
+		as.publishDownloadJob(ctx, eventTypes.DownloadJob{
+			Action:      eventTypes.DownloadActionRemove,
+			InfoHash:    t.InfoHash,
+			DeleteFiles: true,
+		})
 	}
 
 	// Delete torrents from database
@@ -356,15 +401,13 @@ func (as *AdminServiceImpl) DeleteTorrent(c *gin.Context, infoHash string) (*vo.
 		return nil, err
 	}
 
-	// Remove from torrent client
-	as.torrentManager.Client().RemoveTorrent(infoHash, true)
-
-	// Delete download files
-	if torrentRecord.DownloadPath != "" {
-		if err := os.RemoveAll(torrentRecord.DownloadPath); err != nil {
-			as.loggerManager.Logger().Warnf("failed to remove download files: %v", err)
-		}
-	}
+	// Tell the worker to stop seeding/downloading and delete the on-disk
+	// files. The worker is the only side that owns the disk.
+	as.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
+		Action:      eventTypes.DownloadActionRemove,
+		InfoHash:    infoHash,
+		DeleteFiles: true,
+	})
 
 	// Delete related transcode jobs
 	as.dbManager.DB().Where("info_hash = ?", infoHash).Delete(&transcodeModel.TranscodeJob{})
@@ -402,23 +445,30 @@ func (as *AdminServiceImpl) ResetTranscode(c *gin.Context, infoHash string) (*vo
 		return nil, err
 	}
 
-	// Delete derived files (transcoded/extracted) and reset original file transcode status
-	filesDeleted := 0
+	// Collect derived file paths and DB ids. Physical removal is delegated
+	// to the worker via file-ops-jobs — the server has no business doing
+	// os.Remove on a path it doesn't own.
+	var derivedPaths []string
 	var derivedIDs []int64
-
 	for _, f := range allFiles {
 		if f.Source == "transcoded" || f.Source == "extracted" {
-			// Delete the physical file
-			if err := os.Remove(f.Path); err != nil {
-				if !os.IsNotExist(err) {
-					as.loggerManager.Logger().Warnf("failed to delete derived file %s: %v", f.Path, err)
-				}
-			} else {
-				filesDeleted++
-				as.loggerManager.Logger().Infof("Deleted derived file: %s", f.Path)
+			if f.Path != "" {
+				derivedPaths = append(derivedPaths, f.Path)
 			}
 			derivedIDs = append(derivedIDs, f.ID)
 		}
+	}
+
+	if len(derivedPaths) > 0 {
+		as.publishFileOp(c.Request.Context(), torrentTypes.FileOpMessage{
+			Op:           torrentTypes.FileOpDeleteDerived,
+			OpID:         eventTypes.GenerateEventID(),
+			TorrentID:    torrentRecord.ID,
+			InfoHash:     infoHash,
+			DownloadPath: torrentRecord.DownloadPath,
+			TorrentName:  torrentRecord.Name,
+			Paths:        derivedPaths,
+		})
 	}
 
 	// Delete derived file records from torrent_files
@@ -456,16 +506,19 @@ func (as *AdminServiceImpl) ResetTranscode(c *gin.Context, infoHash string) (*vo
 	as.dbManager.DB().Where("info_hash = ?", infoHash).Delete(&transcodeModel.TranscodeJob{})
 
 	currentUserID := auth.GetUserID(c)
-	as.loggerManager.Logger().Infof("Transcode reset by admin: infoHash=%s, filesDeleted=%d, resetBy=%d", infoHash, filesDeleted, currentUserID)
+	as.loggerManager.Logger().Infof("Transcode reset by admin: infoHash=%s, derivedDispatched=%d, resetBy=%d",
+		infoHash, len(derivedPaths), currentUserID)
 
 	return &vo.ResetTranscodeResponse{
 		InfoHash:     infoHash,
-		FilesDeleted: filesDeleted,
-		Message:      fmt.Sprintf("Transcode reset successfully, %d files deleted", filesDeleted),
+		FilesDeleted: len(derivedPaths),
+		Message:      fmt.Sprintf("Transcode reset; %d derived file(s) dispatched for worker deletion", len(derivedPaths)),
 	}, nil
 }
 
-// GetStats returns system statistics
+// GetStats returns system statistics. Disk numbers come from worker
+// heartbeats — the server side has no idea where the actual storage is in
+// split deployment, so we read them from whoever last reported.
 func (as *AdminServiceImpl) GetStats(c *gin.Context) (*vo.AdminStatsResponse, error) {
 	var totalUsers int64
 	as.dbManager.DB().Model(&userModel.User{}).Count(&totalUsers)
@@ -485,33 +538,19 @@ func (as *AdminServiceImpl) GetStats(c *gin.Context) (*vo.AdminStatsResponse, er
 	var activeDownloads int64
 	as.dbManager.DB().Model(&torrentModel.Torrent{}).Where("status = ?", torrentModel.StatusDownloading).Count(&activeDownloads)
 
-	// Calculate actual disk usage
-	var actualDiskUsage int64
-	downloadDir := as.torrentManager.Client().GetDownloadDir()
-	if downloadDir != "" {
-		filepath.Walk(downloadDir, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() {
-				actualDiskUsage += info.Size()
-			}
-			return nil
-		})
-	}
-
-	// Get disk total and free space
+	const gb = int64(1024 * 1024 * 1024)
 	var diskTotal, diskFree int64
-	if downloadDir != "" {
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(downloadDir, &stat); err == nil {
-			diskTotal = int64(stat.Blocks) * int64(stat.Bsize)
-			diskFree = int64(stat.Bavail) * int64(stat.Bsize)
-		}
+	if as.statusStore != nil {
+		summary := as.statusStore.AggregateDisk(c.Request.Context())
+		diskTotal = summary.TotalGB * gb
+		diskFree = summary.FreeGB * gb
 	}
 
 	return &vo.AdminStatsResponse{
 		TotalUsers:         totalUsers,
 		TotalTorrents:      totalTorrents,
 		TotalStorage:       totalStorage,
-		ActualDiskUsage:    actualDiskUsage,
+		ActualDiskUsage:    totalStorage, // best-effort: derived from DB sum
 		DiskTotal:          diskTotal,
 		DiskFree:           diskFree,
 		TranscodingJobs:    transcodingJobs,

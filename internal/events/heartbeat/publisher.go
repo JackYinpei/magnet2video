@@ -32,6 +32,11 @@ type Publisher struct {
 	mu   sync.RWMutex
 	jobs map[string]eventTypes.HeartbeatJob // keyed by "jobType:infoHash:fileName"
 
+	// freshBoot is true until the first successful heartbeat lands. The server
+	// uses this flag to re-dispatch any jobs that were active before the
+	// worker restarted.
+	freshBoot atomic.Bool
+
 	stop atomic.Bool
 	done chan struct{}
 }
@@ -39,7 +44,7 @@ type Publisher struct {
 // NewPublisher constructs a heartbeat publisher.
 // downloadDir is used to report free disk space to the server.
 func NewPublisher(gw gateway.WorkerGateway, loggerManager logger.LoggerManager, downloadDir, version string) *Publisher {
-	return &Publisher{
+	p := &Publisher{
 		gateway:       gw,
 		loggerManager: loggerManager,
 		downloadDir:   downloadDir,
@@ -47,6 +52,8 @@ func NewPublisher(gw gateway.WorkerGateway, loggerManager logger.LoggerManager, 
 		jobs:          make(map[string]eventTypes.HeartbeatJob),
 		done:          make(chan struct{}),
 	}
+	p.freshBoot.Store(true)
+	return p
 }
 
 // RegisterJob records an in-flight job (shown in heartbeat payload).
@@ -99,12 +106,16 @@ func (p *Publisher) Start(ctx context.Context) {
 }
 
 func (p *Publisher) publishOnce(ctx context.Context) {
+	free, total := p.diskInfoGB()
+	freshBoot := p.freshBoot.Load()
 	hb := eventTypes.Heartbeat{
 		WorkerID:    p.gateway.WorkerID(),
 		Timestamp:   time.Now().UnixMilli(),
 		CurrentJobs: p.snapshotJobs(),
-		DiskFreeGB:  p.diskFreeGB(),
+		DiskFreeGB:  free,
+		DiskTotalGB: total,
 		Version:     p.version,
+		FreshBoot:   freshBoot,
 	}
 	if err := p.gateway.PublishHeartbeat(ctx, hb); err != nil {
 		if p.loggerManager != nil {
@@ -114,12 +125,19 @@ func (p *Publisher) publishOnce(ctx context.Context) {
 		}
 		return
 	}
+	// First successful publish: drop the FreshBoot flag so subsequent beats
+	// don't re-trigger the server's recovery logic.
+	if freshBoot {
+		p.freshBoot.Store(false)
+	}
 	if p.loggerManager != nil {
 		p.loggerManager.Logger().Infof(
-			"Worker heartbeat published: workerID=%s jobs=%d diskFreeGB=%d version=%s",
+			"Worker heartbeat published: workerID=%s jobs=%d diskFreeGB=%d diskTotalGB=%d freshBoot=%v version=%s",
 			hb.WorkerID,
 			len(hb.CurrentJobs),
 			hb.DiskFreeGB,
+			hb.DiskTotalGB,
+			hb.FreshBoot,
 			hb.Version,
 		)
 	}
@@ -135,19 +153,20 @@ func (p *Publisher) snapshotJobs() []eventTypes.HeartbeatJob {
 	return out
 }
 
-// diskFreeGB reports free space on the download directory filesystem.
-func (p *Publisher) diskFreeGB() int64 {
+// diskInfoGB reports (free, total) GB on the download directory filesystem.
+func (p *Publisher) diskInfoGB() (int64, int64) {
 	if p.downloadDir == "" {
-		return 0
+		return 0, 0
 	}
 	path := p.downloadDir
 	if _, err := os.Stat(path); err != nil {
-		return 0
+		return 0, 0
 	}
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0
+		return 0, 0
 	}
-	freeBytes := int64(stat.Bavail) * int64(stat.Bsize)
-	return freeBytes / (1024 * 1024 * 1024)
+	free := int64(stat.Bavail) * int64(stat.Bsize) / (1024 * 1024 * 1024)
+	total := int64(stat.Blocks) * int64(stat.Bsize) / (1024 * 1024 * 1024)
+	return free, total
 }

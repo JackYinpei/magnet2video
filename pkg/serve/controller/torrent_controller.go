@@ -22,10 +22,12 @@ import (
 	"magnet2video/internal/cloud"
 	cloudTypes "magnet2video/internal/cloud/types"
 	"magnet2video/internal/db"
+	eventTypes "magnet2video/internal/events/types"
 	"magnet2video/internal/middleware/auth"
 	torrentModel "magnet2video/internal/model/torrent"
 	"magnet2video/internal/queue"
 	"magnet2video/internal/tmdb"
+	torrentTypes "magnet2video/internal/torrent/types"
 	"magnet2video/internal/types/consts"
 	"magnet2video/internal/types/errno"
 	"magnet2video/internal/utils/errorx"
@@ -67,6 +69,20 @@ func NewTorrentController(
 		queueProducer:       queueProducer,
 		tmdbClient:          tmdbClient,
 	}
+}
+
+// publishFileOp dispatches a filesystem-mutating command to the worker.
+// Failure is logged but never blocks the API response — the caller has
+// already updated DB state, and the stuck-state reaper will retry if needed.
+func (tc *TorrentController) publishFileOp(ctx context.Context, op torrentTypes.FileOpMessage) {
+	if tc.queueProducer == nil {
+		return
+	}
+	data, err := json.Marshal(op)
+	if err != nil {
+		return
+	}
+	_ = tc.queueProducer.Send(ctx, torrentTypes.TopicFileOps, nil, data)
 }
 
 // ParseMagnet handles magnet URI parsing
@@ -380,6 +396,12 @@ func (tc *TorrentController) ServeFile(c *gin.Context) {
 		return
 	}
 
+	// In split deployment the file lives on the worker, not on this host.
+	// We still try the cloud redirect path below so users with already-uploaded
+	// content get a working URL, but if the file isn't in cloud yet there is
+	// nothing the server can stream.
+	splitDeployment := tc.config != nil && tc.config.AppConfig.Mode == configs.ModeServer
+
 	// Try to lookup file in DB and redirect to cloud if uploaded
 	if tc.cloudStorageManager.IsEnabled() {
 		cleanParamPath := strings.TrimPrefix(filePath, "/")
@@ -406,6 +428,16 @@ func (tc *TorrentController) ServeFile(c *gin.Context) {
 				}
 			}
 		}
+	}
+
+	// Local streaming requires the worker to live in the same process. In
+	// split (mode=server) deployment the torrent client runs on a remote
+	// host, so there is nothing local to read from.
+	if splitDeployment {
+		c.JSON(http.StatusServiceUnavailable, vo.Fail(c,
+			"local streaming is unavailable in split deployment; wait for cloud upload to complete",
+			errorx.New(errno.ErrCloudStorageDisabled)))
+		return
 	}
 
 	// Try to get file stream (with fuzzy matching support)
@@ -443,6 +475,8 @@ func (tc *TorrentController) ServeTranscodedFile(c *gin.Context) {
 		return
 	}
 
+	splitDeployment := tc.config != nil && tc.config.AppConfig.Mode == configs.ModeServer
+
 	// Try to lookup file in DB and redirect to cloud if uploaded
 	if tc.cloudStorageManager.IsEnabled() {
 		cleanParamPath := strings.TrimPrefix(filePath, "/")
@@ -464,6 +498,14 @@ func (tc *TorrentController) ServeTranscodedFile(c *gin.Context) {
 				}
 			}
 		}
+	}
+
+	// Local fallback requires worker + server in the same process.
+	if splitDeployment {
+		c.JSON(http.StatusServiceUnavailable, vo.Fail(c,
+			"transcoded streaming is unavailable in split deployment; wait for cloud upload to complete",
+			errorx.New(errno.ErrCloudStorageDisabled)))
+		return
 	}
 
 	// Build full path (download directory + file path)
@@ -828,7 +870,10 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 			continue
 		}
 
-		// Determine local path (handles both absolute and relative persisted paths)
+		// Resolve the worker-side local path from DB-known fields. We do not
+		// os.Stat anything here — the server may not even share a filesystem
+		// with the worker. The worker re-validates / falls through to its own
+		// path on consume.
 		localPath := resolveRetryLocalPath(torrentRecord, file)
 
 		// Build cloud path
@@ -841,15 +886,8 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 			contentType = ""
 		}
 
-		// Get file size
-		var fileSize int64
-		if info, err := os.Stat(localPath); err == nil {
-			fileSize = info.Size()
-		} else {
-			fileSize = file.Size
-		}
-
-		// Build and send message
+		// Build and send message — file size comes from DB (worker wrote it on
+		// download.completed / transcode.completed).
 		msg := cloudTypes.CloudUploadMessage{
 			TorrentID:     torrentRecord.ID,
 			InfoHash:      torrentRecord.InfoHash,
@@ -858,7 +896,7 @@ func (tc *TorrentController) RetryCloudUpload(c *gin.Context) {
 			LocalPath:     localPath,
 			CloudPath:     cloudPath,
 			ContentType:   contentType,
-			FileSize:      fileSize,
+			FileSize:      file.Size,
 			IsTranscoded:  file.Source == "transcoded",
 			CreatorID:     torrentRecord.CreatorID,
 			RetryCount:    0,
@@ -984,16 +1022,9 @@ func (tc *TorrentController) RetryCloudUploadFile(c *gin.Context) {
 		contentType = ""
 	}
 
-	// Get file size
-	var fileSize int64
-	if info, err := os.Stat(localPath); err == nil {
-		fileSize = info.Size()
-	} else {
-		fileSize = file.Size
-	}
-
 	// Outbox-style: send first; only on success update DB statuses. If sending
 	// fails the file row stays as-is so a future retry can pick it up.
+	// File size comes from DB — we do not os.Stat the worker's path here.
 	msg := cloudTypes.CloudUploadMessage{
 		TorrentID:     torrentRecord.ID,
 		InfoHash:      torrentRecord.InfoHash,
@@ -1002,7 +1033,7 @@ func (tc *TorrentController) RetryCloudUploadFile(c *gin.Context) {
 		LocalPath:     localPath,
 		CloudPath:     cloudPath,
 		ContentType:   contentType,
-		FileSize:      fileSize,
+		FileSize:      file.Size,
 		IsTranscoded:  file.Source == "transcoded",
 		CreatorID:     torrentRecord.CreatorID,
 		RetryCount:    0,
@@ -1122,19 +1153,37 @@ func (tc *TorrentController) DeleteLocalFiles(c *gin.Context) {
 		return
 	}
 
-	// Delete local files
+	// Delegate the actual deletion to the worker. We dispatch one
+	// delete-torrent-dir op (covers the {download_path}/{name} subtree) plus
+	// one delete-paths op for any derived files that live elsewhere — the
+	// worker enforces the download-dir boundary on every path.
 	if torrentRecord.DownloadPath != "" {
-		torrentDir := filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name)
-		if info, err := os.Stat(torrentDir); err == nil && info.IsDir() {
-			os.RemoveAll(torrentDir)
-		} else {
-			// Try individual files
-			for _, file := range torrentRecord.Files {
-				localPath := resolveRetryLocalPath(torrentRecord, file)
-				if localPath != "" {
-					os.Remove(localPath)
-				}
+		tc.publishFileOp(c.Request.Context(), torrentTypes.FileOpMessage{
+			Op:           torrentTypes.FileOpDeleteTorrentDir,
+			OpID:         eventTypes.GenerateEventID(),
+			TorrentID:    torrentRecord.ID,
+			InfoHash:     req.InfoHash,
+			DownloadPath: torrentRecord.DownloadPath,
+			TorrentName:  torrentRecord.Name,
+			CreatorID:    userID,
+		})
+
+		var derivedPaths []string
+		for _, f := range torrentRecord.Files {
+			if (f.Source == "transcoded" || f.Source == "extracted") && f.Path != "" {
+				derivedPaths = append(derivedPaths, f.Path)
 			}
+		}
+		if len(derivedPaths) > 0 {
+			tc.publishFileOp(c.Request.Context(), torrentTypes.FileOpMessage{
+				Op:           torrentTypes.FileOpDeletePaths,
+				OpID:         eventTypes.GenerateEventID(),
+				TorrentID:    torrentRecord.ID,
+				InfoHash:     req.InfoHash,
+				DownloadPath: torrentRecord.DownloadPath,
+				Paths:        derivedPaths,
+				CreatorID:    userID,
+			})
 		}
 	}
 
@@ -1209,45 +1258,30 @@ func shouldRetryCloudUploadFile(file torrentModel.TorrentFile, force bool) bool 
 	}
 }
 
+// resolveRetryLocalPath returns the worker-side canonical path for a file.
+// It does NOT touch the local filesystem — server and worker may not even
+// share one. We pick the most likely location from DB-known fields and let
+// the worker fall back / fail with a clear error if it can't find the file.
+//
+//   - Original files: {download_path}/{torrent_name}/{basename(path)} is
+//     anacrolix's default layout. If file.Path is already absolute we trust it.
+//   - Derived (transcoded/extracted) files: file.Path is recorded by the
+//     worker at creation time and is treated as authoritative.
 func resolveRetryLocalPath(torrentRecord torrentModel.Torrent, file torrentModel.TorrentFile) string {
-	candidates := make([]string, 0, 4)
-
 	if file.Source == "original" || file.Source == "" {
-		candidates = append(candidates,
-			filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name, filepath.Base(file.Path)),
-			filepath.Join(torrentRecord.DownloadPath, file.Path),
-			file.Path,
-		)
-	} else {
-		candidates = append(candidates, file.Path)
-		if !filepath.IsAbs(file.Path) {
-			candidates = append(candidates,
-				filepath.Join(torrentRecord.DownloadPath, file.Path),
-				filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name, filepath.Base(file.Path)),
-			)
+		if filepath.IsAbs(file.Path) {
+			return file.Path
 		}
+		if torrentRecord.DownloadPath != "" {
+			return filepath.Join(torrentRecord.DownloadPath, torrentRecord.Name, filepath.Base(file.Path))
+		}
+		return file.Path
 	}
-
-	seen := make(map[string]struct{}, len(candidates))
-	for _, p := range candidates {
-		if p == "" {
-			continue
-		}
-		if _, ok := seen[p]; ok {
-			continue
-		}
-		seen[p] = struct{}{}
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
+	// Derived: the worker wrote this row, so file.Path is whatever it chose.
+	if filepath.IsAbs(file.Path) || torrentRecord.DownloadPath == "" {
+		return file.Path
 	}
-
-	for _, p := range candidates {
-		if p != "" {
-			return p
-		}
-	}
-	return file.Path
+	return filepath.Join(torrentRecord.DownloadPath, file.Path)
 }
 
 func recalculateTorrentCloudSummary(torrentRecord *torrentModel.Torrent) {
