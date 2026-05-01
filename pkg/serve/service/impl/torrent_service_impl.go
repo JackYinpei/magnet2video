@@ -74,6 +74,24 @@ func NewTorrentService(
 	return instance
 }
 
+// resolveDownloadDir returns the directory used for relative-path
+// rewriting. Picks the live torrent client when available (mode=all),
+// otherwise falls back to the configured value (mode=server has no
+// torrent client at all).
+func (ts *TorrentServiceImpl) resolveDownloadDir() string {
+	if ts.torrentManager != nil {
+		if cl := ts.torrentManager.Client(); cl != nil {
+			if d := cl.GetDownloadDir(); d != "" {
+				return d
+			}
+		}
+	}
+	if ts.config != nil {
+		return ts.config.TorrentConfig.DownloadDir
+	}
+	return ""
+}
+
 // publishDownloadJob publishes a download control message to the download-jobs topic.
 func (ts *TorrentServiceImpl) publishDownloadJob(ctx context.Context, job eventTypes.DownloadJob) error {
 	if ts.queueProducer == nil {
@@ -296,15 +314,7 @@ func (ts *TorrentServiceImpl) StartDownload(c *gin.Context, req *dto.StartDownlo
 	// mode=server we fall back to whatever the config says. This is purely
 	// for display / "where does this torrent live" — actual writes happen
 	// on the worker.
-	var downloadPath string
-	if ts.torrentManager != nil {
-		if cl := ts.torrentManager.Client(); cl != nil {
-			downloadPath = cl.GetDownloadDir()
-		}
-	}
-	if downloadPath == "" {
-		downloadPath = ts.config.TorrentConfig.DownloadDir
-	}
+	downloadPath := ts.resolveDownloadDir()
 
 	if result.Error == gorm.ErrRecordNotFound {
 		// Create new torrent record
@@ -721,7 +731,7 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 		return nil, err
 	}
 
-	downloadDir := ts.torrentManager.Client().GetDownloadDir()
+	downloadDir := ts.resolveDownloadDir()
 
 	// Build flat file list directly from stored files
 	allFiles := make([]vo.TorrentFileInfo, len(t.Files))
@@ -786,15 +796,28 @@ func (ts *TorrentServiceImpl) GetTorrentDetail(c *gin.Context, infoHash string) 
 	}, nil
 }
 
-// GetFilePath returns the file path for serving
+// GetFilePath returns the file path for serving. Only valid in mode=all
+// where the torrent client is in-process; mode=server returns an error.
 func (ts *TorrentServiceImpl) GetFilePath(c *gin.Context, infoHash string, filePath string) (string, error) {
+	if ts.torrentManager == nil {
+		return "", errors.New("torrent client not available in this mode")
+	}
 	client := ts.torrentManager.Client()
+	if client == nil {
+		return "", errors.New("torrent client unavailable")
+	}
 	return client.GetFilePath(infoHash, filePath)
 }
 
-// GetFileStream returns the file stream for serving
+// GetFileStream returns the file stream for serving. Only valid in mode=all.
 func (ts *TorrentServiceImpl) GetFileStream(c *gin.Context, infoHash string, filePath string) (io.ReadSeeker, *vo.TorrentFileInfo, error) {
+	if ts.torrentManager == nil {
+		return nil, nil, errors.New("torrent client not available in this mode")
+	}
 	client := ts.torrentManager.Client()
+	if client == nil {
+		return nil, nil, errors.New("torrent client unavailable")
+	}
 	reader, info, err := client.GetFileReader(infoHash, filePath)
 	if err != nil {
 		return nil, nil, err
@@ -810,9 +833,10 @@ func (ts *TorrentServiceImpl) GetFileStream(c *gin.Context, infoHash string, fil
 	return reader, fileInfo, nil
 }
 
-// GetDownloadDir returns the download directory path
+// GetDownloadDir returns the download directory path. Falls back to the
+// configured value when the torrent client is not in this process.
 func (ts *TorrentServiceImpl) GetDownloadDir() string {
-	return ts.torrentManager.Client().GetDownloadDir()
+	return ts.resolveDownloadDir()
 }
 
 // SetPosterFromFile sets poster from an existing torrent file
@@ -853,7 +877,7 @@ func (ts *TorrentServiceImpl) SetPosterFromFile(c *gin.Context, req *dto.SetPost
 		return nil, errors.New("poster file must be an image")
 	}
 
-	downloadDir := ts.torrentManager.Client().GetDownloadDir()
+	downloadDir := ts.resolveDownloadDir()
 	relPath := toRelativePath(file.Path, downloadDir)
 	if relPath == "" {
 		return nil, errors.New("invalid poster file path")
@@ -1080,12 +1104,21 @@ func (ts *TorrentServiceImpl) restoreTorrents() {
 			}
 		}
 
-		// Call client to restore
-		// Note: We use the raw client methods which we know exist on the implementation
-		if err := ts.torrentManager.Client().RestoreTorrent(t.InfoHash, t.Trackers, selectedFiles); err != nil {
-			ts.loggerManager.Logger().Errorf("failed to restore torrent %s: %v", t.InfoHash, err)
+		// Re-issue the start command via MQ so the worker (in-process for
+		// mode=all, remote for mode=server in the future when this method
+		// runs there) reloads the torrent. This replaces a direct call into
+		// the local torrent client, keeping the server↔worker boundary
+		// crisp.
+		if err := ts.publishDownloadJob(context.Background(), eventTypes.DownloadJob{
+			Action:        eventTypes.DownloadActionStart,
+			InfoHash:      t.InfoHash,
+			MagnetURI:     magnetURIFor(t.InfoHash, t.Trackers),
+			SelectedFiles: selectedFiles,
+			Trackers:      t.Trackers,
+		}); err != nil {
+			ts.loggerManager.Logger().Errorf("failed to publish restore job for %s: %v", t.InfoHash, err)
 		} else {
-			ts.loggerManager.Logger().Infof("Restored torrent: %s", t.Name)
+			ts.loggerManager.Logger().Infof("Restore dispatched: %s", t.Name)
 		}
 	}
 }

@@ -36,8 +36,8 @@ func runServer(cfg *configs.Config) {
 	}
 	defer container.RedisManager.Close()
 
-	// Server still has a local torrent manager for ParseMagnet-only use.
-	defer container.TorrentManager.Close()
+	// Server has no torrent client (PR3 split). Only the queue producer
+	// needs explicit shutdown.
 	defer container.QueueProducer.Close()
 
 	container.TorrentService.SetTranscodeChecker(container.TranscodeService)

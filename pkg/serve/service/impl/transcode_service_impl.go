@@ -21,7 +21,6 @@ import (
 	torrentModel "magnet2video/internal/model/torrent"
 	transcodeModel "magnet2video/internal/model/transcode"
 	"magnet2video/internal/queue"
-	"magnet2video/internal/torrent"
 	"magnet2video/internal/transcode/ffmpeg"
 	"magnet2video/internal/transcode/types"
 	"magnet2video/pkg/serve/controller/dto"
@@ -30,11 +29,10 @@ import (
 
 // TranscodeServiceImpl transcode service implementation
 type TranscodeServiceImpl struct {
-	config         *configs.Config
-	loggerManager  logger.LoggerManager
-	dbManager      db.DatabaseManager
-	torrentManager torrent.TorrentManager
-	queueProducer  queue.Producer
+	config        *configs.Config
+	loggerManager logger.LoggerManager
+	dbManager     db.DatabaseManager
+	queueProducer queue.Producer
 }
 
 // NewTranscodeService creates transcode service implementation.
@@ -43,20 +41,32 @@ type TranscodeServiceImpl struct {
 // decide remux vs transcode, but the worker is the only side that actually
 // owns the on-disk files in split deployment. The server now sends a job with
 // Operation="" and the worker probes locally — see TranscodeHandler.resolveOperation.
+//
+// Since PR3 the service no longer takes a TorrentManager either: the only
+// thing it used was GetDownloadDir, which now reads from config (the worker
+// shares the same download_dir relative path).
 func NewTranscodeService(
 	config *configs.Config,
 	loggerManager logger.LoggerManager,
 	dbManager db.DatabaseManager,
-	torrentManager torrent.TorrentManager,
 	queueProducer queue.Producer,
 ) *TranscodeServiceImpl {
 	return &TranscodeServiceImpl{
-		config:         config,
-		loggerManager:  loggerManager,
-		dbManager:      dbManager,
-		torrentManager: torrentManager,
-		queueProducer:  queueProducer,
+		config:        config,
+		loggerManager: loggerManager,
+		dbManager:     dbManager,
+		queueProducer: queueProducer,
 	}
+}
+
+// resolveDownloadDir returns the worker's download directory as configured.
+// The server never reads from this path; it's only used to compose the
+// inputPath string that the worker resolves locally.
+func (ts *TranscodeServiceImpl) resolveDownloadDir() string {
+	if ts.config != nil {
+		return ts.config.TorrentConfig.DownloadDir
+	}
+	return ""
 }
 
 // CheckAndQueueTranscode checks a torrent for files that need transcoding and queues jobs
@@ -84,7 +94,7 @@ func (ts *TranscodeServiceImpl) CheckAndQueueTranscode(c *gin.Context, torrentID
 	// TranscodeHandler.resolveOperation probes locally when Operation is empty
 	// and the CloudUploadHandler stat/opens the file itself. We just dispatch
 	// jobs based on filename heuristics + DB metadata.
-	downloadDir := ts.torrentManager.Client().GetDownloadDir()
+	downloadDir := ts.resolveDownloadDir()
 	var needsTranscode bool
 	var totalTranscode int
 

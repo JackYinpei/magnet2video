@@ -85,7 +85,10 @@ type Container struct {
 	TranscodeService service.TranscodeService
 }
 
-// NewContainer builds the all-in-one container (mode=all).
+// NewContainer builds the all-in-one container (mode=all). The server-side
+// and worker-side dependencies coexist in one process; communication still
+// flows through the queue (GoChannel in-process) so the code path matches
+// split deployment and there's no "all-mode shortcut" that bypasses the MQ.
 func NewContainer(config *configs.Config) (*Container, error) {
 	c := &Container{Config: config}
 	if err := buildShared(c, config); err != nil {
@@ -97,13 +100,18 @@ func NewContainer(config *configs.Config) (*Container, error) {
 	if err := buildWorkerInfra(c, config); err != nil {
 		return nil, err
 	}
-	buildEventPlumbing(c, config)
+	buildServerEventPlumbing(c, config)
+	buildWorkerEventPlumbing(c, config)
 	buildWorkerHandlers(c, config)
 	buildServicesAndControllers(c, config)
 	return c, nil
 }
 
-// NewServerContainer builds a container for mode=server.
+// NewServerContainer builds a container for mode=server. The torrent client,
+// ffmpeg, and the worker-side event publisher / progress reporter are NOT
+// constructed — server's TorrentManager field stays nil. Server-side code
+// that historically needed it falls back to config defaults; code paths
+// that genuinely required it (local file streaming) return 503.
 func NewServerContainer(config *configs.Config) (*Container, error) {
 	c := &Container{Config: config}
 	if err := buildShared(c, config); err != nil {
@@ -112,17 +120,13 @@ func NewServerContainer(config *configs.Config) (*Container, error) {
 	if err := buildServerInfra(c, config); err != nil {
 		return nil, err
 	}
-	// Server may still have a local TorrentManager for ParseMagnet. If the user
-	// wants it offline they can simply not call ParseMagnet.
-	if err := buildWorkerInfra(c, config); err != nil {
-		return nil, err
-	}
-	buildEventPlumbing(c, config)
+	buildServerEventPlumbing(c, config)
 	buildServicesAndControllers(c, config)
 	return c, nil
 }
 
-// NewWorkerContainer builds a container for mode=worker.
+// NewWorkerContainer builds a container for mode=worker. No DB / Redis /
+// services / controllers — the worker is a stateless executor.
 func NewWorkerContainer(config *configs.Config) (*Container, error) {
 	c := &Container{Config: config}
 	if err := buildShared(c, config); err != nil {
@@ -131,10 +135,7 @@ func NewWorkerContainer(config *configs.Config) (*Container, error) {
 	if err := buildWorkerInfra(c, config); err != nil {
 		return nil, err
 	}
-	// Worker-side: gateway + heartbeat publisher + progress reporter + handlers.
-	c.WorkerGateway = eventGateway.NewMQGateway(c.QueueProducer, c.LoggerManager, workerIDFor(config))
-	c.HeartbeatPublisher = heartbeat.NewPublisher(c.WorkerGateway, c.LoggerManager, config.TorrentConfig.DownloadDir, config.AppConfig.AppName)
-	c.ProgressReporter = torrentHandler.NewProgressReporter(c.TorrentManager, c.WorkerGateway, c.LoggerManager)
+	buildWorkerEventPlumbing(c, config)
 	buildWorkerHandlers(c, config)
 	return c, nil
 }
@@ -193,12 +194,20 @@ func buildWorkerInfra(c *Container, config *configs.Config) error {
 	return nil
 }
 
-func buildEventPlumbing(c *Container, config *configs.Config) {
-	c.WorkerGateway = eventGateway.NewMQGateway(c.QueueProducer, c.LoggerManager, workerIDFor(config))
+// buildServerEventPlumbing wires the server-side consumers of worker events
+// (DB writer + heartbeat tracker). Does NOT touch TorrentManager — the
+// server may not have one.
+func buildServerEventPlumbing(c *Container, config *configs.Config) {
 	c.EventProcessor = processor.NewWorkerEventProcessor(config, c.LoggerManager, c.DatabaseManager, c.RedisManager, c.QueueProducer)
 	c.StatusStore = heartbeat.NewStatusStore(c.RedisManager, c.LoggerManager)
 	c.HeartbeatConsumer = heartbeat.NewConsumer(c.StatusStore, c.LoggerManager)
-	// Publisher/reporter only needed in all mode (worker co-located with server).
+}
+
+// buildWorkerEventPlumbing wires the worker-side gateway + publishers.
+// Requires TorrentManager already built (caller must run buildWorkerInfra
+// first).
+func buildWorkerEventPlumbing(c *Container, config *configs.Config) {
+	c.WorkerGateway = eventGateway.NewMQGateway(c.QueueProducer, c.LoggerManager, workerIDFor(config))
 	c.HeartbeatPublisher = heartbeat.NewPublisher(c.WorkerGateway, c.LoggerManager, config.TorrentConfig.DownloadDir, config.AppConfig.AppName)
 	c.ProgressReporter = torrentHandler.NewProgressReporter(c.TorrentManager, c.WorkerGateway, c.LoggerManager)
 }
@@ -227,7 +236,7 @@ func buildServicesAndControllers(c *Container, config *configs.Config) {
 	torrentSvc := impl.NewTorrentService(config, c.LoggerManager, c.DatabaseManager, c.TorrentManager, c.CacheManager, c.QueueProducer, c.ParseMagnetBus)
 	c.TorrentService = torrentSvc
 
-	transcodeSvc := impl.NewTranscodeService(config, c.LoggerManager, c.DatabaseManager, c.TorrentManager, c.QueueProducer)
+	transcodeSvc := impl.NewTranscodeService(config, c.LoggerManager, c.DatabaseManager, c.QueueProducer)
 	c.TranscodeService = transcodeSvc
 
 	c.TorrentController = controller.NewTorrentController(config, torrentSvc, transcodeSvc, c.DatabaseManager, c.CloudStorageManager, c.QueueProducer, c.TMDBClient)
