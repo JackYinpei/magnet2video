@@ -8,10 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"magnet2video/internal/cache"
+	"magnet2video/internal/cloud"
 	"magnet2video/internal/db"
 	"magnet2video/internal/events/heartbeat"
 	eventTypes "magnet2video/internal/events/types"
@@ -22,6 +26,7 @@ import (
 	userModel "magnet2video/internal/model/user"
 	"magnet2video/internal/queue"
 	torrentTypes "magnet2video/internal/torrent/types"
+	"magnet2video/internal/types/consts"
 	"magnet2video/pkg/serve/controller/dto"
 	"magnet2video/pkg/serve/service"
 	"magnet2video/pkg/vo"
@@ -33,11 +38,17 @@ import (
 // directly. Removals are dispatched as queue messages (download-jobs for
 // torrent state, file-ops-jobs for derived files), and disk stats come from
 // worker heartbeats via the status store.
+//
+// Hard-delete paths (DeleteTorrent, DeleteUser) DO call into cloud storage
+// directly, because the cloud copy is server-managed (the worker only writes
+// to cloud during upload jobs — it doesn't own the lifecycle).
 type AdminServiceImpl struct {
-	loggerManager logger.LoggerManager
-	dbManager     db.DatabaseManager
-	queueProducer queue.Producer
-	statusStore   *heartbeat.StatusStore
+	loggerManager       logger.LoggerManager
+	dbManager           db.DatabaseManager
+	queueProducer       queue.Producer
+	statusStore         *heartbeat.StatusStore
+	cloudStorageManager cloud.CloudStorageManager
+	cacheManager        cache.CacheManager
 }
 
 // NewAdminService creates admin service implementation
@@ -46,12 +57,16 @@ func NewAdminService(
 	dbManager db.DatabaseManager,
 	queueProducer queue.Producer,
 	statusStore *heartbeat.StatusStore,
+	cloudStorageManager cloud.CloudStorageManager,
+	cacheManager cache.CacheManager,
 ) service.AdminService {
 	return &AdminServiceImpl{
-		loggerManager: loggerManager,
-		dbManager:     dbManager,
-		queueProducer: queueProducer,
-		statusStore:   statusStore,
+		loggerManager:       loggerManager,
+		dbManager:           dbManager,
+		queueProducer:       queueProducer,
+		statusStore:         statusStore,
+		cloudStorageManager: cloudStorageManager,
+		cacheManager:        cacheManager,
 	}
 }
 
@@ -244,7 +259,7 @@ func (as *AdminServiceImpl) DeleteUser(c *gin.Context, userID int64) (*vo.Delete
 	// the worker handles RemoveTorrent (action=remove + DeleteFiles=true)
 	// which both untracks the torrent and deletes its on-disk files.
 	var torrents []torrentModel.Torrent
-	as.dbManager.DB().Where("creator_id = ?", userID).Find(&torrents)
+	as.dbManager.DB().Preload("Files").Where("creator_id = ?", userID).Find(&torrents)
 	ctx := c.Request.Context()
 	for _, t := range torrents {
 		as.publishDownloadJob(ctx, eventTypes.DownloadJob{
@@ -253,6 +268,23 @@ func (as *AdminServiceImpl) DeleteUser(c *gin.Context, userID int64) (*vo.Delete
 			DeleteFiles:    true,
 			TargetWorkerID: t.WorkerID,
 		})
+		// Same hard-delete cleanup as DeleteTorrent: nuke each torrent's
+		// cloud objects so the bucket doesn't accumulate orphans every
+		// time we delete a user.
+		as.deleteCloudObjectsForTorrent(ctx, &t)
+	}
+
+	// Delete file rows owned by this user's torrents (no FK cascade).
+	if len(torrents) > 0 {
+		torrentIDs := make([]int64, 0, len(torrents))
+		for _, t := range torrents {
+			torrentIDs = append(torrentIDs, t.ID)
+		}
+		if err := as.dbManager.DB().
+			Where("torrent_id IN ?", torrentIDs).
+			Delete(&torrentModel.TorrentFile{}).Error; err != nil {
+			as.loggerManager.Logger().Warnf("failed to delete user torrent_files: %v", err)
+		}
 	}
 
 	// Delete torrents from database
@@ -271,6 +303,10 @@ func (as *AdminServiceImpl) DeleteUser(c *gin.Context, userID int64) (*vo.Delete
 		as.loggerManager.Logger().Errorf("failed to delete user: %v", err)
 		return nil, err
 	}
+
+	// Invalidate caches: deleted user's list, plus public list (their public
+	// torrents are gone too).
+	as.invalidateTorrentListCache(userID)
 
 	as.loggerManager.Logger().Infof("User deleted by admin: userID=%d, deletedBy=%d", userID, currentUserID)
 
@@ -394,7 +430,10 @@ func (as *AdminServiceImpl) ListAllTorrents(c *gin.Context, req *dto.ListAllTorr
 // DeleteTorrent deletes a torrent by info hash
 func (as *AdminServiceImpl) DeleteTorrent(c *gin.Context, infoHash string) (*vo.DeleteTorrentResponse, error) {
 	var torrentRecord torrentModel.Torrent
-	if err := as.dbManager.DB().Where("info_hash = ?", infoHash).First(&torrentRecord).Error; err != nil {
+	if err := as.dbManager.DB().
+		Preload("Files").
+		Where("info_hash = ?", infoHash).
+		First(&torrentRecord).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("torrent not found")
 		}
@@ -403,7 +442,8 @@ func (as *AdminServiceImpl) DeleteTorrent(c *gin.Context, infoHash string) (*vo.
 	}
 
 	// Tell the worker to stop seeding/downloading and delete the on-disk
-	// files. The worker is the only side that owns the disk.
+	// files. The worker is the only side that owns the disk: it will Drop()
+	// the torrent from the BT client and os.RemoveAll the download dir.
 	as.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
 		Action:         eventTypes.DownloadActionRemove,
 		InfoHash:       infoHash,
@@ -411,14 +451,35 @@ func (as *AdminServiceImpl) DeleteTorrent(c *gin.Context, infoHash string) (*vo.
 		TargetWorkerID: torrentRecord.WorkerID,
 	})
 
+	// Hard-delete is the admin's "leave nothing behind" path, so also
+	// delete the cloud copy. Failures are logged but don't abort the
+	// delete — leaving DB rows pointing at orphaned cloud objects is worse
+	// than leaving cloud objects with no DB rows (which a later sweep can
+	// reclaim).
+	as.deleteCloudObjectsForTorrent(c.Request.Context(), &torrentRecord)
+
 	// Delete related transcode jobs
 	as.dbManager.DB().Where("info_hash = ?", infoHash).Delete(&transcodeModel.TranscodeJob{})
 
-	// Delete torrent record
+	// Delete file rows. Without this, hard-deleting the torrent leaves
+	// torrent_files orphans (no FK cascade is configured).
+	if err := as.dbManager.DB().
+		Where("torrent_id = ?", torrentRecord.ID).
+		Delete(&torrentModel.TorrentFile{}).Error; err != nil {
+		as.loggerManager.Logger().Warnf("failed to delete torrent_files for torrent_id=%d: %v",
+			torrentRecord.ID, err)
+	}
+
+	// Delete torrent record (hard delete — Torrent uses a custom Deleted
+	// bool, not gorm.DeletedAt, so Delete() removes the row).
 	if err := as.dbManager.DB().Delete(&torrentRecord).Error; err != nil {
 		as.loggerManager.Logger().Errorf("failed to delete torrent: %v", err)
 		return nil, err
 	}
+
+	// Invalidate creator's list + public list caches so the gone torrent
+	// disappears from the UI without waiting for TTL.
+	as.invalidateTorrentListCache(torrentRecord.CreatorID)
 
 	currentUserID := auth.GetUserID(c)
 	as.loggerManager.Logger().Infof("Torrent deleted by admin: infoHash=%s, deletedBy=%d", infoHash, currentUserID)
@@ -427,6 +488,66 @@ func (as *AdminServiceImpl) DeleteTorrent(c *gin.Context, infoHash string) (*vo.
 		InfoHash: infoHash,
 		Message:  "Torrent deleted successfully",
 	}, nil
+}
+
+// deleteCloudObjectsForTorrent best-effort removes every cloud object owned
+// by a torrent: each file's CloudPath plus the poster (when stored as
+// "cloud://<objectPath>"). All errors are logged and swallowed — a partial
+// cloud cleanup is better than aborting the whole delete and leaving a
+// half-deleted torrent in the DB.
+func (as *AdminServiceImpl) deleteCloudObjectsForTorrent(ctx context.Context, t *torrentModel.Torrent) {
+	if as.cloudStorageManager == nil || !as.cloudStorageManager.IsEnabled() {
+		return
+	}
+
+	for _, f := range t.Files {
+		if f.CloudPath == "" {
+			continue
+		}
+		if err := as.cloudStorageManager.Delete(ctx, f.CloudPath); err != nil {
+			as.loggerManager.Logger().Warnf(
+				"admin delete: cloud delete failed torrent=%s file_index=%d cloud_path=%s: %v",
+				t.InfoHash, f.Index, f.CloudPath, err,
+			)
+		}
+	}
+
+	if strings.HasPrefix(t.PosterPath, consts.PosterPathCloudPrefix) {
+		objectPath := strings.TrimPrefix(t.PosterPath, consts.PosterPathCloudPrefix)
+		if objectPath != "" {
+			if err := as.cloudStorageManager.Delete(ctx, objectPath); err != nil {
+				as.loggerManager.Logger().Warnf(
+					"admin delete: cloud poster delete failed torrent=%s object=%s: %v",
+					t.InfoHash, objectPath, err,
+				)
+			}
+		}
+	}
+}
+
+// invalidateTorrentListCache mirrors TorrentServiceImpl.invalidateTorrentListCache
+// so admin-driven mutations also drop stale list views. Async, never blocks
+// the caller.
+func (as *AdminServiceImpl) invalidateTorrentListCache(userID int64) {
+	if as.cacheManager == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		keysToDelete := []string{
+			cache.PublicTorrentListKey(),
+			cache.PublicTorrentListKey() + ":internal",
+		}
+		if userID > 0 {
+			keysToDelete = append(keysToDelete, cache.TorrentListKey(userID))
+		}
+
+		if err := as.cacheManager.Delete(ctx, keysToDelete...); err != nil {
+			as.loggerManager.Logger().Warnf("admin: failed to invalidate cache: %v", err)
+		}
+	}()
 }
 
 // ResetTranscode resets transcode status and deletes transcoded files

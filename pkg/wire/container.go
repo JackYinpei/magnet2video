@@ -249,7 +249,7 @@ func buildServicesAndControllers(c *Container, config *configs.Config) {
 	userSvc := impl.NewUserService(c.LoggerManager, c.DatabaseManager)
 	c.UserController = controller.NewUserController(userSvc)
 
-	adminSvc := impl.NewAdminService(c.LoggerManager, c.DatabaseManager, c.QueueProducer, c.StatusStore)
+	adminSvc := impl.NewAdminService(c.LoggerManager, c.DatabaseManager, c.QueueProducer, c.StatusStore, c.CloudStorageManager, c.CacheManager)
 	c.AdminController = controller.NewAdminController(adminSvc)
 
 	c.WorkerController = controller.NewWorkerController(c.StatusStore)
