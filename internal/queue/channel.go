@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -126,9 +127,24 @@ func (c *ChannelConsumer) consumeTopic(topic string) {
 	for {
 		select {
 		case msg := <-ch:
-			if err := c.handler.Handle(c.ctx, msg); err != nil {
-				log.Printf("Channel consumer handle error for topic %s: %v", topic, err)
+			err := c.handler.Handle(c.ctx, msg)
+			if err == nil {
+				continue
 			}
+			if errors.Is(err, ErrNotForMe) {
+				// Message wasn't for us; put it back so a peer consumer (in
+				// mode=all this is rare — GoChannel is a single-process
+				// broker — but we keep parity with RabbitMQ semantics).
+				go func(m *Message) {
+					time.Sleep(notForMeRequeueDelay)
+					select {
+					case ch <- m:
+					case <-c.ctx.Done():
+					}
+				}(msg)
+				continue
+			}
+			log.Printf("Channel consumer handle error for topic %s: %v", topic, err)
 		case <-c.ctx.Done():
 			return
 		}

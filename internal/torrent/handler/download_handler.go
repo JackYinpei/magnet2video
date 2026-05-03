@@ -52,6 +52,22 @@ func (h *DownloadJobHandler) Handle(ctx context.Context, msg *queue.Message) err
 		return nil
 	}
 
+	// Multi-worker routing: when the server targets a specific worker (the
+	// one that already owns the torrent's on-disk state), every other worker
+	// that pulls the message off the shared queue must put it back so the
+	// rightful owner can take it. Returning queue.ErrNotForMe causes the
+	// consumer to NACK + requeue with a small delay, avoiding hot-loops.
+	//
+	// An empty TargetWorkerID means "any worker may take it" — used for
+	// brand-new downloads that don't have an owner yet.
+	if job.TargetWorkerID != "" && h.gateway != nil && job.TargetWorkerID != h.gateway.WorkerID() {
+		h.loggerManager.Logger().Debugf(
+			"download job not for me: action=%s target=%s self=%s infoHash=%s — requeue",
+			job.Action, job.TargetWorkerID, h.gateway.WorkerID(), job.InfoHash,
+		)
+		return queue.ErrNotForMe
+	}
+
 	client := h.torrentManager.Client()
 	if client == nil {
 		return fmt.Errorf("torrent client unavailable")

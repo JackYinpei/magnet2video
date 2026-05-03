@@ -5,10 +5,19 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"magnet2video/configs"
 )
+
+// ErrNotForMe is the sentinel a Handler returns when a message was delivered
+// to the wrong consumer (e.g. a download/file-op job whose TargetWorkerID
+// belongs to a different worker on the shared queue). Consumers MUST treat
+// this as "do not ack — put the message back on the queue so a peer can take
+// it" rather than "permanent failure". Implementations add a small delay
+// before requeue to avoid the same consumer immediately re-grabbing it.
+var ErrNotForMe = errors.New("queue: message not for this consumer")
 
 // Producer defines the interface for message production
 type Producer interface {
@@ -22,7 +31,13 @@ type Consumer interface {
 	Close() error
 }
 
-// Handler defines the interface for message processing
+// Handler defines the interface for message processing.
+//
+// Returning nil → message was processed (ack).
+// Returning ErrNotForMe → message belongs to another consumer (requeue).
+// Any other non-nil error → permanent failure for this delivery (ack to
+// avoid infinite retry loops; the handler is expected to have already
+// recorded the failure).
 type Handler interface {
 	Handle(ctx context.Context, msg *Message) error
 }

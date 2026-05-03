@@ -39,6 +39,14 @@ type Torrent struct {
 
 	// Local file management
 	LocalDeleted bool `gorm:"default:false" json:"local_deleted"` // Whether local files have been deleted
+
+	// WorkerID identifies the worker node that owns this torrent's on-disk
+	// state. It is set by the worker when it first picks up a download/start
+	// job and used by the server to route subsequent commands (download
+	// control, file ops) back to the same worker. Empty means the torrent
+	// has not been claimed yet — typical for freshly-created records or for
+	// single-worker deployments where targeting is unnecessary.
+	WorkerID string `gorm:"type:varchar(64);index;default:''" json:"worker_id"`
 }
 
 // StringSlice is a slice of strings that can be stored in database

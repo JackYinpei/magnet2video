@@ -42,6 +42,13 @@ type FileOpMessage struct {
 	TorrentName  string   `json:"torrent_name"`  // used for FileOpDeleteTorrentDir
 	Paths        []string `json:"paths"`         // used for FileOpDeletePaths / FileOpDeleteDerived
 	CreatorID    int64    `json:"creator_id"`    // for audit/log
+
+	// TargetWorkerID restricts the op to a specific worker. The server sets
+	// this to the torrent's WorkerID so that — in a multi-worker setup —
+	// only the worker actually holding the files performs the deletion.
+	// Empty value means any worker may execute (e.g. broadcast cleanup or
+	// single-worker deployments).
+	TargetWorkerID string `json:"target_worker_id"`
 }
 
 // ParseMagnetRequest is sent server→worker. RequestID is the correlation id

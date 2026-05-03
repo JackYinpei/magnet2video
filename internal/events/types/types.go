@@ -235,4 +235,13 @@ type DownloadJob struct {
 	SelectedFiles []int    `json:"selected_files"`
 	Trackers      []string `json:"trackers"`
 	DeleteFiles   bool     `json:"delete_files"`
+
+	// TargetWorkerID restricts the job to a specific worker. Empty means any
+	// worker may pick it up — used for fresh downloads where no worker owns
+	// the torrent yet. Non-empty values are used when the server needs to
+	// reach a specific worker (e.g. the one already downloading / holding
+	// the on-disk files). Workers that receive a job whose TargetWorkerID
+	// is non-empty and not their own MUST ack and ignore it so that a
+	// peer worker on the same queue can pick it up.
+	TargetWorkerID string `json:"target_worker_id"`
 }

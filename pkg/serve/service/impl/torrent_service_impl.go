@@ -104,6 +104,28 @@ func (ts *TorrentServiceImpl) publishDownloadJob(ctx context.Context, job eventT
 	return ts.queueProducer.Send(ctx, eventTypes.TopicDownloadJobs, nil, data)
 }
 
+// lookupWorkerID returns the worker that owns the on-disk state for the given
+// info hash. Returns empty string when the torrent has not been claimed yet
+// (newly created records, mode=all single-process deployments before the
+// first progress event arrives, or rows pre-dating the worker_id column).
+//
+// Empty values are treated as "any worker may execute" by the worker filter.
+// Non-empty values cause the worker handler to NACK + requeue any message
+// that doesn't target it, so peer workers can pick it up.
+func (ts *TorrentServiceImpl) lookupWorkerID(infoHash string) string {
+	if ts.dbManager == nil || ts.dbManager.DB() == nil {
+		return ""
+	}
+	var t torrentModel.Torrent
+	if err := ts.dbManager.DB().
+		Select("worker_id").
+		Where("info_hash = ?", infoHash).
+		First(&t).Error; err != nil {
+		return ""
+	}
+	return t.WorkerID
+}
+
 // magnetURIFor reconstructs a magnet URI from infoHash + trackers.
 func magnetURIFor(infoHash string, trackers []string) string {
 	u := fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
@@ -441,8 +463,9 @@ func (ts *TorrentServiceImpl) GetProgress(c *gin.Context, req *dto.GetProgressRe
 // server never drives the torrent client directly.
 func (ts *TorrentServiceImpl) PauseDownload(c *gin.Context, req *dto.PauseDownloadRequest) (*vo.PauseDownloadResponse, error) {
 	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-		Action:   eventTypes.DownloadActionPause,
-		InfoHash: req.InfoHash,
+		Action:         eventTypes.DownloadActionPause,
+		InfoHash:       req.InfoHash,
+		TargetWorkerID: ts.lookupWorkerID(req.InfoHash),
 	}); err != nil {
 		ts.loggerManager.Logger().Errorf("publish pause job: %v", err)
 	}
@@ -465,9 +488,10 @@ func (ts *TorrentServiceImpl) PauseDownload(c *gin.Context, req *dto.PauseDownlo
 // ResumeDownload resumes a paused torrent download. Always dispatched via MQ.
 func (ts *TorrentServiceImpl) ResumeDownload(c *gin.Context, req *dto.ResumeDownloadRequest) (*vo.ResumeDownloadResponse, error) {
 	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-		Action:        eventTypes.DownloadActionResume,
-		InfoHash:      req.InfoHash,
-		SelectedFiles: req.SelectedFiles,
+		Action:         eventTypes.DownloadActionResume,
+		InfoHash:       req.InfoHash,
+		SelectedFiles:  req.SelectedFiles,
+		TargetWorkerID: ts.lookupWorkerID(req.InfoHash),
 	}); err != nil {
 		ts.loggerManager.Logger().Errorf("publish resume job: %v", err)
 	}
@@ -489,9 +513,10 @@ func (ts *TorrentServiceImpl) ResumeDownload(c *gin.Context, req *dto.ResumeDown
 // RemoveTorrent removes a torrent from the system. Always dispatched via MQ.
 func (ts *TorrentServiceImpl) RemoveTorrent(c *gin.Context, req *dto.RemoveTorrentRequest) (*vo.RemoveTorrentResponse, error) {
 	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-		Action:      eventTypes.DownloadActionRemove,
-		InfoHash:    req.InfoHash,
-		DeleteFiles: req.DeleteFiles,
+		Action:         eventTypes.DownloadActionRemove,
+		InfoHash:       req.InfoHash,
+		DeleteFiles:    req.DeleteFiles,
+		TargetWorkerID: ts.lookupWorkerID(req.InfoHash),
 	}); err != nil {
 		ts.loggerManager.Logger().Errorf("publish remove job: %v", err)
 	}
@@ -519,8 +544,9 @@ func (ts *TorrentServiceImpl) RemoveTorrent(c *gin.Context, req *dto.RemoveTorre
 // fresh-boot recovery (RedispatchActiveTorrents) skips by design.
 func (ts *TorrentServiceImpl) StopSeed(c *gin.Context, req *dto.StopSeedRequest) (*vo.StopSeedResponse, error) {
 	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-		Action:   eventTypes.DownloadActionStopSeed,
-		InfoHash: req.InfoHash,
+		Action:         eventTypes.DownloadActionStopSeed,
+		InfoHash:       req.InfoHash,
+		TargetWorkerID: ts.lookupWorkerID(req.InfoHash),
 	}); err != nil {
 		ts.loggerManager.Logger().Errorf("publish stop_seed job: %v", err)
 	}
@@ -560,10 +586,11 @@ func (ts *TorrentServiceImpl) ResumeSeed(c *gin.Context, req *dto.ResumeSeedRequ
 	}
 
 	if err := ts.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-		Action:        eventTypes.DownloadActionResumeSeed,
-		InfoHash:      req.InfoHash,
-		SelectedFiles: selectedFiles,
-		Trackers:      t.Trackers,
+		Action:         eventTypes.DownloadActionResumeSeed,
+		InfoHash:       req.InfoHash,
+		SelectedFiles:  selectedFiles,
+		Trackers:       t.Trackers,
+		TargetWorkerID: t.WorkerID,
 	}); err != nil {
 		ts.loggerManager.Logger().Errorf("publish resume_seed job: %v", err)
 	}
@@ -1136,24 +1163,45 @@ func (ts *TorrentServiceImpl) restoreTorrents() {
 // after a worker restart). Intended for two callers:
 //
 //   - Startup: ensure newly-spawned workers pick up unfinished work even if
-//     no event was missed (mode=all on first boot).
+//     no event was missed (mode=all on first boot). reason="startup".
 //   - Worker fresh-boot: invoked from the heartbeat consumer when a worker
-//     publishes its first heartbeat — see PR4. The reason argument shows up
-//     in logs to make it obvious which path triggered the dispatch.
+//     publishes its first heartbeat. reason="fresh-boot:<workerID>". Only
+//     torrents owned by that worker (or unclaimed ones) are redispatched —
+//     without this filter, worker A rebooting would steal worker B's
+//     in-flight torrents off the shared queue.
 //
 // Torrents with LocalDeleted=true are paused instead of restored; the user
 // explicitly removed their disk copy and we don't want to silently re-grab
 // terabytes of data.
+//
+// Each dispatched message carries TargetWorkerID = torrent.WorkerID so the
+// worker filter on the consumer side enforces routing even if the queue
+// briefly hands the message to the wrong consumer.
 func (ts *TorrentServiceImpl) RedispatchActiveTorrents(ctx context.Context, reason string) {
-	var torrents []torrentModel.Torrent
-	if err := ts.dbManager.DB().
+	const freshBootPrefix = "fresh-boot:"
+	bootingWorker := ""
+	if strings.HasPrefix(reason, freshBootPrefix) {
+		bootingWorker = strings.TrimPrefix(reason, freshBootPrefix)
+	}
+
+	q := ts.dbManager.DB().
 		Preload("Files", func(db *gorm.DB) *gorm.DB {
 			return db.Order("`index` asc")
 		}).
 		Where("deleted = ? AND status IN ?", false, []int{
 			torrentModel.StatusDownloading,
 			torrentModel.StatusCompleted,
-		}).Find(&torrents).Error; err != nil {
+		})
+	// Multi-worker safety: when a specific worker is reporting fresh-boot,
+	// only redispatch its own torrents (plus the unclaimed ones, which any
+	// worker may pick up). Without this, peer workers' active torrents get
+	// re-issued and another consumer can race-pick them up.
+	if bootingWorker != "" {
+		q = q.Where("worker_id = ? OR worker_id = ''", bootingWorker)
+	}
+
+	var torrents []torrentModel.Torrent
+	if err := q.Find(&torrents).Error; err != nil {
 		ts.loggerManager.Logger().Errorf("redispatch (%s): load torrents failed: %v", reason, err)
 		return
 	}
@@ -1187,17 +1235,28 @@ func (ts *TorrentServiceImpl) RedispatchActiveTorrents(ctx context.Context, reas
 			}
 		}
 
+		// Target the owning worker. Unclaimed torrents (worker_id empty)
+		// fall through to "any worker" routing, which is the right answer
+		// for fresh records or pre-migration data.
+		targetWorkerID := t.WorkerID
+		// During a fresh-boot redispatch, force unclaimed torrents to the
+		// booting worker so they don't get scattered across peers.
+		if targetWorkerID == "" && bootingWorker != "" {
+			targetWorkerID = bootingWorker
+		}
+
 		if err := ts.publishDownloadJob(dispatchCtx, eventTypes.DownloadJob{
-			Action:        eventTypes.DownloadActionStart,
-			InfoHash:      t.InfoHash,
-			MagnetURI:     magnetURIFor(t.InfoHash, t.Trackers),
-			SelectedFiles: selectedFiles,
-			Trackers:      t.Trackers,
+			Action:         eventTypes.DownloadActionStart,
+			InfoHash:       t.InfoHash,
+			MagnetURI:      magnetURIFor(t.InfoHash, t.Trackers),
+			SelectedFiles:  selectedFiles,
+			Trackers:       t.Trackers,
+			TargetWorkerID: targetWorkerID,
 		}); err != nil {
 			ts.loggerManager.Logger().Errorf("redispatch (%s): publish failed for %s: %v", reason, t.InfoHash, err)
 			continue
 		}
-		ts.loggerManager.Logger().Infof("redispatch (%s): dispatched %s", reason, t.Name)
+		ts.loggerManager.Logger().Infof("redispatch (%s): dispatched %s (target=%s)", reason, t.Name, targetWorkerID)
 	}
 }
 

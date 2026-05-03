@@ -34,6 +34,7 @@ func TorrentToDomain(m *torrentModel.Torrent) *domain.Torrent {
 		CloudUploadedCount:  m.CloudUploadedCount,
 		TotalCloudUpload:    m.TotalCloudUpload,
 		LocalDeleted:        m.LocalDeleted,
+		WorkerID:            m.WorkerID,
 		CreatedAt:           m.CreatedAt,
 		UpdatedAt:           m.UpdatedAt,
 	}
@@ -70,6 +71,7 @@ func TorrentToModel(d *domain.Torrent) *torrentModel.Torrent {
 		CloudUploadedCount:  d.CloudUploadedCount,
 		TotalCloudUpload:    d.TotalCloudUpload,
 		LocalDeleted:        d.LocalDeleted,
+		WorkerID:            d.WorkerID,
 	}
 	m.ID = d.ID
 	m.CreatedAt = d.CreatedAt

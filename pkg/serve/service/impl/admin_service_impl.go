@@ -248,9 +248,10 @@ func (as *AdminServiceImpl) DeleteUser(c *gin.Context, userID int64) (*vo.Delete
 	ctx := c.Request.Context()
 	for _, t := range torrents {
 		as.publishDownloadJob(ctx, eventTypes.DownloadJob{
-			Action:      eventTypes.DownloadActionRemove,
-			InfoHash:    t.InfoHash,
-			DeleteFiles: true,
+			Action:         eventTypes.DownloadActionRemove,
+			InfoHash:       t.InfoHash,
+			DeleteFiles:    true,
+			TargetWorkerID: t.WorkerID,
 		})
 	}
 
@@ -404,9 +405,10 @@ func (as *AdminServiceImpl) DeleteTorrent(c *gin.Context, infoHash string) (*vo.
 	// Tell the worker to stop seeding/downloading and delete the on-disk
 	// files. The worker is the only side that owns the disk.
 	as.publishDownloadJob(c.Request.Context(), eventTypes.DownloadJob{
-		Action:      eventTypes.DownloadActionRemove,
-		InfoHash:    infoHash,
-		DeleteFiles: true,
+		Action:         eventTypes.DownloadActionRemove,
+		InfoHash:       infoHash,
+		DeleteFiles:    true,
+		TargetWorkerID: torrentRecord.WorkerID,
 	})
 
 	// Delete related transcode jobs
@@ -461,13 +463,14 @@ func (as *AdminServiceImpl) ResetTranscode(c *gin.Context, infoHash string) (*vo
 
 	if len(derivedPaths) > 0 {
 		as.publishFileOp(c.Request.Context(), torrentTypes.FileOpMessage{
-			Op:           torrentTypes.FileOpDeleteDerived,
-			OpID:         eventTypes.GenerateEventID(),
-			TorrentID:    torrentRecord.ID,
-			InfoHash:     infoHash,
-			DownloadPath: torrentRecord.DownloadPath,
-			TorrentName:  torrentRecord.Name,
-			Paths:        derivedPaths,
+			Op:             torrentTypes.FileOpDeleteDerived,
+			OpID:           eventTypes.GenerateEventID(),
+			TorrentID:      torrentRecord.ID,
+			InfoHash:       infoHash,
+			DownloadPath:   torrentRecord.DownloadPath,
+			TorrentName:    torrentRecord.Name,
+			Paths:          derivedPaths,
+			TargetWorkerID: torrentRecord.WorkerID,
 		})
 	}
 

@@ -819,6 +819,45 @@ h2 {
     gap: 0.5rem;
 }
 
+/* Player action cluster: groups cast button, Chromecast launcher and the
+   share toggles so they share the same baseline + spacing on both desktop
+   and the narrower mobile header. */
+.player-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+/* Cast button — generic, used for Remote Playback (AirPlay) or Web Share. */
+.player-actions #cast-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.875rem;
+    font-size: 0.85rem;
+}
+
+.player-actions #cast-btn .cast-icon {
+    font-size: 1rem;
+    line-height: 1;
+}
+
+/* Hidden until JS detects support — keeps the chrome clean on browsers
+   that can't cast. */
+.player-actions .hidden {
+    display: none !important;
+}
+
+/* The Chromecast SDK ships its own custom element. Constrain it so it
+   sits flush with the other action buttons. */
+.cast-launcher {
+    --connected-color: #1a73e8;
+    --disconnected-color: var(--color-text-secondary, #888);
+    width: 28px;
+    height: 28px;
+}
+
 .share-toggle {
     display: flex;
     align-items: center;

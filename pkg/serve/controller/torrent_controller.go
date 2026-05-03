@@ -1180,12 +1180,43 @@ func (tc *TorrentController) DeleteLocalFiles(c *gin.Context) {
 		return
 	}
 
-	// Check: all cloud-upload files must be completed
-	for _, file := range torrentRecord.Files {
-		if file.CloudUploadStatus == torrentModel.CloudUploadStatusPending ||
-			file.CloudUploadStatus == torrentModel.CloudUploadStatusUploading {
-			c.JSON(http.StatusBadRequest, vo.Fail(c, "cannot delete local files while uploading", errorx.New(errno.ErrInvalidParams, errorx.KV("msg", "cloud upload in progress"))))
-			return
+	// Cloud-upload safety check: when cloud storage is enabled we treat
+	// the cloud copy as the user's safety net before deleting locally.
+	// Block deletion unless every selected, eligible file has reached
+	// CloudUploadStatusCompleted. None and Failed both count as "not safe":
+	//
+	//   - Pending / Uploading: worker may still be doing it — letting the
+	//     user delete now races the upload and may leave neither copy.
+	//   - Failed: cloud has nothing usable, deleting local = total data loss.
+	//   - None: file was never queued for upload (cloud_status not yet
+	//     decided, or eligibility logic missed it). Refuse rather than
+	//     silently nuke the only copy. Force=true on the request bypasses
+	//     this for users who explicitly want to drop the local files even
+	//     though cloud is incomplete.
+	//
+	// Cloud not enabled in config → skip this check entirely; we have no
+	// safety net to wait for, and the user is consciously running a local-
+	// only deployment.
+	cloudEnabled := tc.cloudStorageManager != nil && tc.cloudStorageManager.IsEnabled()
+	if cloudEnabled && !req.Force {
+		for _, file := range torrentRecord.Files {
+			if !file.IsSelected {
+				continue
+			}
+			// Subtitles / poster / non-streamable files that were never
+			// candidates for cloud upload are safe to delete locally —
+			// they aren't "the only copy of valuable content".
+			if file.CloudUploadStatus == torrentModel.CloudUploadStatusNone &&
+				file.Type != "video" {
+				continue
+			}
+			if file.CloudUploadStatus != torrentModel.CloudUploadStatusCompleted {
+				c.JSON(http.StatusBadRequest, vo.Fail(c, "cloud upload not completed for all files",
+					errorx.New(errno.ErrInvalidParams, errorx.KV("msg",
+						fmt.Sprintf("file %q cloud_status=%d (need completed); pass force=true to delete anyway",
+							file.Path, file.CloudUploadStatus)))))
+				return
+			}
 		}
 	}
 
@@ -1207,13 +1238,14 @@ func (tc *TorrentController) DeleteLocalFiles(c *gin.Context) {
 	// worker enforces the download-dir boundary on every path.
 	if torrentRecord.DownloadPath != "" {
 		tc.publishFileOp(c.Request.Context(), torrentTypes.FileOpMessage{
-			Op:           torrentTypes.FileOpDeleteTorrentDir,
-			OpID:         eventTypes.GenerateEventID(),
-			TorrentID:    torrentRecord.ID,
-			InfoHash:     req.InfoHash,
-			DownloadPath: torrentRecord.DownloadPath,
-			TorrentName:  torrentRecord.Name,
-			CreatorID:    userID,
+			Op:             torrentTypes.FileOpDeleteTorrentDir,
+			OpID:           eventTypes.GenerateEventID(),
+			TorrentID:      torrentRecord.ID,
+			InfoHash:       req.InfoHash,
+			DownloadPath:   torrentRecord.DownloadPath,
+			TorrentName:    torrentRecord.Name,
+			CreatorID:      userID,
+			TargetWorkerID: torrentRecord.WorkerID,
 		})
 
 		var derivedPaths []string
@@ -1224,13 +1256,14 @@ func (tc *TorrentController) DeleteLocalFiles(c *gin.Context) {
 		}
 		if len(derivedPaths) > 0 {
 			tc.publishFileOp(c.Request.Context(), torrentTypes.FileOpMessage{
-				Op:           torrentTypes.FileOpDeletePaths,
-				OpID:         eventTypes.GenerateEventID(),
-				TorrentID:    torrentRecord.ID,
-				InfoHash:     req.InfoHash,
-				DownloadPath: torrentRecord.DownloadPath,
-				Paths:        derivedPaths,
-				CreatorID:    userID,
+				Op:             torrentTypes.FileOpDeletePaths,
+				OpID:           eventTypes.GenerateEventID(),
+				TorrentID:      torrentRecord.ID,
+				InfoHash:       req.InfoHash,
+				DownloadPath:   torrentRecord.DownloadPath,
+				Paths:          derivedPaths,
+				CreatorID:      userID,
+				TargetWorkerID: torrentRecord.WorkerID,
 			})
 		}
 	}

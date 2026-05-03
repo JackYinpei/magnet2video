@@ -153,12 +153,22 @@
                 <div class="player-header">
                     <button id="back-btn" class="btn">← 返回</button>
                     <h2 id="player-title">正在播放</h2>
-                    <div class="player-share" id="player-share">
-                        <!-- 分享按钮，仅对自己的资源显示 -->
+                    <div class="player-actions">
+                        <!-- 投屏按钮：浏览器支持时由 JS 显示 -->
+                        <button id="cast-btn" class="btn btn-icon hidden" title="投屏到电视/外接屏幕" aria-label="投屏">
+                            <span class="cast-icon" aria-hidden="true">📺</span><span class="cast-label">投屏</span>
+                        </button>
+                        <!-- Chromecast 原生按钮（Cast SDK 渲染） -->
+                        <google-cast-launcher id="cast-launcher" class="cast-launcher hidden"></google-cast-launcher>
+                        <!-- 分享按钮（仅对自己的资源显示） -->
+                        <div class="player-share" id="player-share"></div>
                     </div>
                 </div>
                 <div class="player-container">
-                    <video id="video-player" controls>
+                    <video id="video-player" controls
+                        playsinline
+                        x-webkit-airplay="allow"
+                        crossorigin="anonymous">
                         Your browser does not support the video tag.
                     </video>
                 </div>
@@ -376,6 +386,9 @@
     </div>
 
     <script src="app.js"></script>
+    <!-- Google Cast SDK (Chromecast). Loaded async; app.js gates the button on
+         availability so non-Chromium browsers degrade silently. -->
+    <script async src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 </body>
 
 </html>

@@ -32,6 +32,10 @@ type Torrent struct {
 
 	LocalDeleted bool
 
+	// WorkerID is the id of the worker that owns this torrent's on-disk
+	// state. Empty when the torrent has not yet been claimed by any worker.
+	WorkerID string
+
 	CreatedAt int64
 	UpdatedAt int64
 }

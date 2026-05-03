@@ -50,6 +50,19 @@ func (h *FileOpsHandler) Handle(ctx context.Context, msg *queue.Message) error {
 		return nil
 	}
 
+	// Multi-worker routing: in split deployments only the worker that
+	// actually holds the files should run a deletion. Any other worker
+	// that grabs the same message off the shared queue must put it back
+	// so the rightful owner can pick it up. Returning queue.ErrNotForMe
+	// causes the consumer to NACK + requeue with a small delay.
+	if op.TargetWorkerID != "" && h.gateway != nil && op.TargetWorkerID != h.gateway.WorkerID() {
+		h.loggerManager.Logger().Debugf(
+			"file-op not for me: op=%s target=%s self=%s torrent=%d — requeue",
+			op.Op, op.TargetWorkerID, h.gateway.WorkerID(), op.TorrentID,
+		)
+		return queue.ErrNotForMe
+	}
+
 	result := eventTypes.FileOpResultPayload{
 		OpID:      op.OpID,
 		Op:        op.Op,

@@ -26,7 +26,12 @@ type RetryCloudUploadFileRequest struct {
 	Force     bool   `json:"force"`                          // Override Pending/Uploading mid-states
 }
 
-// DeleteLocalFilesRequest request for deleting local files of a torrent
+// DeleteLocalFilesRequest request for deleting local files of a torrent.
+// Force=true bypasses the "all files must be uploaded to cloud" safety check
+// — the caller is acknowledging that some files may not have a cloud copy
+// and is willing to drop the local files anyway. Use sparingly: combined
+// with a missing or failed cloud upload it deletes the only copy.
 type DeleteLocalFilesRequest struct {
 	InfoHash string `json:"info_hash" validate:"required"` // Info hash of the torrent
+	Force    bool   `json:"force"`                         // Bypass cloud-completed safety check
 }

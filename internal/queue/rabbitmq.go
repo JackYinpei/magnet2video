@@ -5,6 +5,7 @@ package queue
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -14,6 +15,12 @@ import (
 
 	"magnet2video/configs"
 )
+
+// notForMeRequeueDelay is how long a consumer sleeps before NACKing a message
+// that wasn't targeted at it. Picks a value short enough that a redispatch
+// converges quickly across a 2-3 worker cluster, long enough that we don't
+// burn CPU bouncing the same message between consumers.
+const notForMeRequeueDelay = 250 * time.Millisecond
 
 // RabbitMQProducer sends messages to RabbitMQ
 type RabbitMQProducer struct {
@@ -340,10 +347,22 @@ func (c *RabbitMQConsumer) consumeMessages(topic string, msgs <-chan amqp.Delive
 			}
 
 			if err := c.handler.Handle(c.ctx, msg); err != nil {
-				log.Printf("RabbitMQ consumer handle error for topic %s: %v", topic, err)
-				// Don't requeue on error - the handler already marked the job as failed
-				// Requeuing would cause infinite retry loops for permanent failures
-				d.Ack(false)
+				if errors.Is(err, ErrNotForMe) {
+					// Message belongs to another consumer (e.g. targeted at a
+					// specific worker by id). Requeue with a small delay so we
+					// don't immediately re-grab it ourselves and hot-loop.
+					// RabbitMQ has no native delayed requeue, so we sleep on
+					// this consumer goroutine before NACKing — prefetch=1
+					// ensures we're not blocking other in-flight work, and a
+					// few-hundred-ms delay is fine for a routing miss.
+					time.Sleep(notForMeRequeueDelay)
+					_ = d.Nack(false, true)
+				} else {
+					log.Printf("RabbitMQ consumer handle error for topic %s: %v", topic, err)
+					// Don't requeue on error - the handler already marked the job as failed
+					// Requeuing would cause infinite retry loops for permanent failures
+					d.Ack(false)
+				}
 			} else {
 				d.Ack(false)
 			}

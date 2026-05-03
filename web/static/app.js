@@ -78,6 +78,8 @@ const elements = {
     videoPlayer: document.getElementById('video-player'),
     playerFiles: document.getElementById('player-files'),
     playerShare: document.getElementById('player-share'),
+    castBtn: document.getElementById('cast-btn'),
+    castLauncher: document.getElementById('cast-launcher'),
 
     // 个人资料
     profileEmail: document.getElementById('profile-email'),
@@ -132,7 +134,8 @@ function getStatusText(status) {
         1: '下载中',
         2: '已完成',
         3: '失败',
-        4: '已暂停'
+        4: '已暂停',
+        5: '已停止做种'
     };
     return statusMap[status] || '未知';
 }
@@ -751,6 +754,10 @@ function renderDownloads(torrents) {
                         <button class="btn btn-sm pause-btn" data-infohash="${torrent.info_hash}">暂停</button>
                     ` : torrent.status === 4 ? `
                         <button class="btn btn-sm resume-btn" data-infohash="${torrent.info_hash}">继续</button>
+                    ` : torrent.status === 2 ? `
+                        <button class="btn btn-sm stop-seed-btn" data-infohash="${torrent.info_hash}" title="从 swarm 移除,保留本地文件,不再做种">停止做种</button>
+                    ` : torrent.status === 5 ? `
+                        <button class="btn btn-sm resume-seed-btn" data-infohash="${torrent.info_hash}" title="重新加入 swarm,使用本地文件做种">恢复做种</button>
                     ` : ''}
                     <button class="btn btn-sm" onclick="toggleExpandTorrent('${torrent.info_hash}')">${expandedTorrents.has(torrent.info_hash) ? '收起' : '文件'}</button>
                     <button class="btn btn-sm" onclick="openImdbModal('${torrent.info_hash}', '${(torrent.imdb_id || '').replace(/'/g, "\\'")}')">IMDB</button>
@@ -803,6 +810,20 @@ function renderDownloads(torrents) {
             removeTorrent(btn.dataset.infohash);
         });
     });
+
+    elements.downloadsList.querySelectorAll('.stop-seed-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            stopSeed(btn.dataset.infohash);
+        });
+    });
+
+    elements.downloadsList.querySelectorAll('.resume-seed-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            resumeSeed(btn.dataset.infohash);
+        });
+    });
 }
 
 async function pauseDownload(infoHash) {
@@ -852,6 +873,40 @@ async function removeTorrent(infoHash) {
         loadLibrary();
     } catch (error) {
         showToast(error.message || '删除失败', 'error');
+    }
+}
+
+// stopSeed drops the torrent from the swarm but keeps local files. Useful when
+// the user no longer wants to seed (saving upload bandwidth) without deleting
+// the local copy. Backend route: POST /api/v1/torrent/stop-seed
+async function stopSeed(infoHash) {
+    if (!confirm('停止做种后将不再上传该资源,本地文件保留。是否继续?')) {
+        return;
+    }
+    try {
+        await apiRequest(`${TORRENT_API}/stop-seed`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: infoHash })
+        });
+        showToast('已停止做种', 'success');
+        loadDownloads();
+    } catch (error) {
+        showToast(error.message || '停止做种失败', 'error');
+    }
+}
+
+// resumeSeed re-adds a stopped torrent to the swarm using existing local files.
+// Backend route: POST /api/v1/torrent/resume-seed
+async function resumeSeed(infoHash) {
+    try {
+        await apiRequest(`${TORRENT_API}/resume-seed`, {
+            method: 'POST',
+            body: JSON.stringify({ info_hash: infoHash })
+        });
+        showToast('已恢复做种', 'success');
+        loadDownloads();
+    } catch (error) {
+        showToast(error.message || '恢复做种失败', 'error');
     }
 }
 
@@ -1595,6 +1650,10 @@ async function playFile(filePath, originalPath = null, fileIndex = -1) {
 
     elements.videoPlayer.src = videoUrl;
 
+    // Sync any active cast (Chromecast) session to the new source so the
+    // receiver stays in step when the user picks a different file.
+    startCastingSession(videoUrl, (fileInfo && fileInfo.path) || filePath);
+
     // Try to find and load matching subtitle automatically
     // First find the original index for subtitle matching
     let videoOriginalIndex = -1;
@@ -2166,6 +2225,9 @@ function initEventListeners() {
         }
     });
 
+    // 投屏 (Remote Playback API + Google Cast SDK + Web Share fallback)
+    setupCasting();
+
     // 海报预览
     elements.posterModalBackdrop.addEventListener('click', closePosterPreview);
     elements.posterModalClose.addEventListener('click', closePosterPreview);
@@ -2475,3 +2537,129 @@ window.openImdbModal = openImdbModal;
 window.selectTmdbResult = selectTmdbResult;
 window.uploadPoster = uploadPoster;
 window.setPosterFromDownloadList = setPosterFromDownloadList;
+
+// ==========================================================================
+// Casting (投屏)
+//
+// Three layered options, picked at runtime based on browser support:
+//
+//   1. Google Cast SDK (Chromecast). The cast_sender.js script in index.html
+//      registers __onGCastApiAvailable; we then init the CastContext and
+//      reveal the <google-cast-launcher> button. Pushes the current videoUrl
+//      to a Chromecast device. Requires HTTPS in production for the receiver
+//      to load remote URLs.
+//
+//   2. Remote Playback API (AirPlay on Safari, some Android Chrome targets).
+//      Reveals a generic 投屏 button that calls videoEl.remote.prompt() —
+//      lets the OS pick from available receivers.
+//
+//   3. Web Share API fallback. When neither above works (desktop Firefox,
+//      etc.) we fall back to the browser's native share sheet so the user
+//      can hand the video URL to another app.
+//
+// `currentVideoUrl` is captured by playFile() so any started cast session
+// reflects the latest selection — switching files mid-cast updates the
+// receiver's media.
+// ==========================================================================
+
+let currentVideoUrl = '';
+let currentVideoTitle = '';
+let castFramework = null; // global cast.framework once SDK loads
+
+// Hook into the Cast SDK once it's available. The SDK calls this global
+// function when cast_sender.js finishes loading. If the user is on a
+// non-Chromium browser, this never fires and we fall through to Remote
+// Playback / Web Share.
+window['__onGCastApiAvailable'] = function (isAvailable) {
+    if (!isAvailable || !window.cast || !window.cast.framework) return;
+    castFramework = window.cast.framework;
+    castFramework.CastContext.getInstance().setOptions({
+        receiverApplicationId: castFramework.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+        autoJoinPolicy: castFramework.AutoJoinPolicy.ORIGIN_SCOPED,
+    });
+    if (elements.castLauncher) {
+        elements.castLauncher.classList.remove('hidden');
+    }
+};
+
+function setupCasting() {
+    if (!elements.videoPlayer || !elements.castBtn) return;
+
+    // Reveal the generic cast button if Remote Playback or Web Share is
+    // available. Cast SDK has its own <google-cast-launcher> element that
+    // appears separately; we don't want two buttons doing the same thing,
+    // so the generic button is hidden whenever the Cast SDK is active.
+    const supportsRemote = elements.videoPlayer.remote
+        && typeof elements.videoPlayer.remote.watchAvailability === 'function';
+    const supportsShare = typeof navigator.share === 'function';
+
+    if (supportsRemote) {
+        elements.videoPlayer.remote.watchAvailability((available) => {
+            if (available && !castFramework) {
+                elements.castBtn.classList.remove('hidden');
+            } else {
+                elements.castBtn.classList.add('hidden');
+            }
+        }).catch(() => {
+            // watchAvailability can throw on iframes — fall through to share
+            if (supportsShare) elements.castBtn.classList.remove('hidden');
+        });
+    } else if (supportsShare) {
+        elements.castBtn.classList.remove('hidden');
+    }
+
+    elements.castBtn.addEventListener('click', async () => {
+        // Prefer Remote Playback (AirPlay) when available — it's an in-OS
+        // picker, no third-party SDK involved.
+        if (supportsRemote) {
+            try {
+                await elements.videoPlayer.remote.prompt();
+                return;
+            } catch (err) {
+                console.warn('Remote Playback prompt failed, falling back to share:', err);
+            }
+        }
+        // Fall back to Web Share so the user can hand the URL off to e.g.
+        // a Chromecast helper app, AirDrop, Messages, etc.
+        if (supportsShare && currentVideoUrl) {
+            try {
+                await navigator.share({
+                    title: currentVideoTitle || 'Magnet Video',
+                    text: currentVideoTitle || '',
+                    url: currentVideoUrl,
+                });
+            } catch (err) {
+                // User cancelled — silent.
+            }
+        }
+    });
+}
+
+// startCastingSession is called from playFile() whenever the source URL
+// changes, so an already-running Chromecast session swaps to the new file
+// instead of staying stuck on the previous one.
+function startCastingSession(url, title) {
+    currentVideoUrl = url;
+    currentVideoTitle = title || '';
+    if (!castFramework) return;
+    const context = castFramework.CastContext.getInstance();
+    const session = context.getCurrentSession();
+    if (!session) return; // no active receiver — nothing to update
+    const mediaInfo = new chrome.cast.media.MediaInfo(url, guessMimeType(url));
+    mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
+    mediaInfo.metadata.title = currentVideoTitle;
+    const request = new chrome.cast.media.LoadRequest(mediaInfo);
+    session.loadMedia(request).catch((err) => {
+        console.warn('Cast loadMedia failed:', err);
+    });
+}
+
+function guessMimeType(url) {
+    const noQuery = url.split('?')[0];
+    const ext = noQuery.toLowerCase().split('.').pop();
+    if (ext === 'mp4' || ext === 'm4v') return 'video/mp4';
+    if (ext === 'webm') return 'video/webm';
+    if (ext === 'mov') return 'video/quicktime';
+    if (ext === 'mkv') return 'video/x-matroska';
+    return 'video/mp4';
+}

@@ -416,10 +416,20 @@ func (p *WorkerEventProcessor) handleDownloadProgress(ctx context.Context, event
 	// (cache miss after worker restart, admin views, reports) don't see
 	// 0% for everything that hasn't completed. Only progress is updated
 	// here — status / lifecycle is owned by other event handlers.
+	//
+	// We piggyback the worker_id claim on the same throttled UPDATE so
+	// that the torrent gets tagged with the worker that's actually running
+	// it. The server reads this back when it needs to send a targeted
+	// command (pause/resume/remove/file-op) — without it, multi-worker
+	// deployments cannot route deletions / redispatches to the right node.
 	if p.shouldPersistProgress(payload.InfoHash, payload.Progress) {
+		updates := map[string]any{"progress": payload.Progress}
+		if event.WorkerID != "" {
+			updates["worker_id"] = event.WorkerID
+		}
 		if err := p.dbManager.DB().Model(&torrentModel.Torrent{}).
 			Where("info_hash = ?", payload.InfoHash).
-			Update("progress", payload.Progress).Error; err != nil {
+			Updates(updates).Error; err != nil {
 			p.loggerManager.Logger().Warnf("failed to persist download progress: %v", err)
 		}
 	}
@@ -480,12 +490,19 @@ func (p *WorkerEventProcessor) handleDownloadCompleted(ctx context.Context, even
 	if err := p.dbManager.DB().Where("info_hash = ?", payload.InfoHash).First(&t).Error; err != nil {
 		return err
 	}
+	updates := map[string]any{
+		"status":   torrentModel.StatusCompleted,
+		"progress": 100,
+	}
+	// Claim the torrent for the worker that finished it. For very short
+	// downloads we may not have seen a progress event in time to set
+	// worker_id, so do it here as a fallback.
+	if event.WorkerID != "" {
+		updates["worker_id"] = event.WorkerID
+	}
 	p.dbManager.DB().Model(&torrentModel.Torrent{}).
 		Where("id = ?", t.ID).
-		Updates(map[string]any{
-			"status":   torrentModel.StatusCompleted,
-			"progress": 100,
-		})
+		Updates(updates)
 	if p.redisManager != nil && p.redisManager.Client() != nil {
 		_ = p.redisManager.Client().Del(ctx, cache.TorrentProgressKey(payload.InfoHash)).Err()
 	}
